@@ -1,0 +1,17 @@
+# Exclude development, test, and unnecessary files from VSIX
+node_modules/
+.vscode/
+.git/
+*.log
+*.py
+*.vsix
+*.md
+src/
+test/
+resources/
+LICENSE*
+README*
+tsconfig.json
+package-lock.json
+# Keep only out/ if you ship compiled code
+# If you need resources (icons), remove 'resources/' from this list

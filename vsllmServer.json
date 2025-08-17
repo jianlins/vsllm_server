@@ -1,0 +1,7 @@
+{
+  "url": "http://localhost",
+  "port": 8080,
+  "model": "",
+  "apiKey": "",
+  "enableLogging": false
+}

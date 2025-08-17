@@ -1,0 +1,100 @@
+{
+  "name": "vsllm-server",
+  "displayName": "VSCode LLM Server",
+  "description": "Expose VSCode chat models as an OpenAI-compatible API endpoint. Provides a local HTTP server with OpenAI-compatible /v1/chat/completions endpoint, powered by VS Code's Language Model API. Configure URL, port, and control server lifecycle from VS Code.",
+  "version": "0.0.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jianlins/vsllm_server.git"
+  },
+  "author": "jianlins <jianlins@users.noreply.github.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/jianlins/vsllm_server",
+  "bugs": {
+    "url": "https://github.com/jianlins/vsllm_server/issues"
+  },
+  "keywords": [
+    "VSCode",
+    "LLM",
+    "OpenAI",
+    "Language Model",
+    "API",
+    "Chat",
+    "Extension",
+    "Server"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onView:vsllmServerView"
+  ],
+  "contributes": {
+    "configuration": {
+      "type": "object",
+      "title": "VSLLM Server Configuration",
+      "properties": {
+        "vsllmServer.url": {
+          "type": "string",
+          "default": "http://localhost",
+          "markdownDescription": "**Server URL**\nThe base URL for the server (e.g., http://localhost)."
+        },
+        "vsllmServer.port": {
+          "type": "number",
+          "default": 8080,
+          "markdownDescription": "**Server Port**\nThe port number for the server (e.g., 8080)."
+        },
+        "vsllmServer.apiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "**API Key**\nAuthentication key for the API. Leave blank if not required. This is stored securely by VS Code."
+        },
+        "vsllmServer.enableLogging": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "**Enable Logging**\nTurn on verbose logging for debugging and diagnostics."
+        },
+        "vsllmServer.maxTokens": {
+          "type": "number",
+          "default": 2048,
+          "markdownDescription": "**Max Tokens**\nMaximum number of tokens per response."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vsllmServer-sidebar",
+          "title": "VSLLM Server",
+          "icon": "resources/vsllm-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "vsllmServer-sidebar": [
+        {
+          "id": "vsllmServerView",
+          "name": "Server Status",
+          "type": "webview"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.1.37",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "node-fetch": "^2.7.0"
+  }
+}
