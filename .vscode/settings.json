@@ -1,0 +1,8 @@
+{
+    "chat.tools.autoApprove": true,
+    "chat.agent.maxRequests": 1000,
+    "Codegeex.SidebarUI.LanguagePreference": "English",
+    "Codegeex.Comment.LanguagePreference": "English",
+    "Codegeex.CommitMessage.LanguagePreference": "English",
+
+}
