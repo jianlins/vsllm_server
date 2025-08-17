@@ -84,43 +84,46 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>VSLLM Server Configuration</title>
       <style>
-        body { font-family: sans-serif; padding: 20px; }
-        h2 { margin-top: 0; }
-        label { display: block; margin-top: 15px; }
-        input, select { width: 100%; padding: 8px; margin-top: 5px; }
-        button {
-          margin-top: 6px;
-          padding: 2px 7.5px;
-          font-size: 0.6375em;
-          border-radius: 9px;
-          border: none;
-          background: linear-gradient(90deg, #f7c1fc 0%, #b1eaff 100%);
-          color: #333;
-          box-shadow: 0 0.75px 1.5px rgba(0,0,0,0.0375);
-          cursor: pointer;
-          transition: background 0.2s, box-shadow 0.2s;
-          min-height: 21px;
-        }
-        button:hover {
-          background: linear-gradient(90deg, #e6b3e6 0%, #a0d8ef 100%);
-          box-shadow: 0 1.5px 4.5px rgba(0,0,0,0.075);
-        }
-        .advanced { margin-top: 20px; border-top: 1px solid #eee; padding-top: 10px; }
-        .server-buttons {
-          margin-top: 7.5px;
-          display: flex;
-          gap: 3px;
-          flex-wrap: wrap;
-        }
-        .server-buttons button {
-          flex: 1 1 0;
-          min-width: 45px;
-          margin-top: 0;
-          padding: 2.25px 6px;
-          font-size: 0.60em;
-          border-radius: 7.5px;
-        }
-        #serverResponse { width: 100%; height: 100px; margin-top: 16px; resize: vertical; border-radius: 10px; border: 1px solid #eee; }
+          body { font-family: sans-serif; padding: 20px; }
+          h2 { margin-top: 0; }
+          label { display: block; margin-top: 15px; }
+          input, select { width: 100%; padding: 8px; margin-top: 5px; }
+          button {
+            margin-top: 6px;
+            padding: 2px 7.5px;
+            font-size: 0.85em;
+            border-radius: 4px;
+            border: none;
+            background-color: #222;
+            color: #fff;
+            cursor: pointer;
+            min-height: 25px;
+          }
+          button:hover {
+            background-color: #222;
+          }
+          .advanced { margin-top: 20px; border-top: 1px solid #eee; padding-top: 10px; }
+          .server-buttons {
+            margin-top: 7.5px;
+            display: flex;
+            gap: 3px;
+            flex-wrap: wrap;
+          }
+          .server-buttons button {
+            flex: 1 1 0;
+            min-width: 45px;
+            margin-top: 0;
+            padding: 2.25px 6px;
+            font-size: 0.60em;
+            border-radius: 7.5px;
+            background-color: #222;
+            color: #fff;
+            border: none;
+          }
+          .server-buttons button:hover {
+            background-color: #222;
+          }
+          #serverResponse { width: 100%; height: 100px; margin-top: 16px; resize: vertical; border-radius: 10px; border: 1px solid #eee; }
       </style>
     </head>
     <body>
@@ -297,9 +300,9 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
         }
       } else if (message.command === 'getModelList') {
         console.log("VSLLM Sidebar: getModelList called");
-        // Use createClient to always get a usable model (real or fallback)
-        var models: any[] = [];
-        var errorMsg = '';
+        // Fetch ALL available models from VS Code LM API and pass them to the webview
+        let models: any[] = [];
+        let errorMsg = '';
         try {
           console.log("VSLLM Sidebar: Checking vscode.lm API", 'lm' in vscode, vscode.lm?.selectChatModels);
           if (!('lm' in vscode) || !vscode.lm?.selectChatModels) {
@@ -307,11 +310,17 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
             console.error("VSLLM Sidebar: LM API not available");
           } else {
             const selector = { vendor: "copilot" };
-            console.log("VSLLM Sidebar: Calling createClient with selector", selector);
-            const model = await createClient(selector);
-            console.log("VSLLM Sidebar: createClient returned", model);
-            if (model && model.id !== "default-lm") {
-              models = [model];
+            console.log("VSLLM Sidebar: Calling selectChatModels with selector", selector);
+            const rawModels = await vscode.lm.selectChatModels(selector);
+            if (rawModels && rawModels.length > 0) {
+              console.log("VSLLM Sidebar: selectChatModels returned:");
+              rawModels.forEach(m => console.log("  ", m.id));
+            } else {
+              console.log("VSLLM Sidebar: selectChatModels returned no models.");
+            }
+            if (rawModels && rawModels.length > 0) {
+              // Map to a simple serializable structure for webview/globalState
+              models = rawModels.map(m => ({ id: m.id, vendor: m.vendor, family: m.family }));
             } else {
               errorMsg = '⚠️ No Copilot models found. Please check your Copilot setup and user consent.';
               models = [];
@@ -325,7 +334,15 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
         console.log("VSLLM Sidebar: Updating globalState with models", models);
         await this.context.globalState.update("vsllmServer.models", models);
         if (this.webviewView) {
-          console.log("VSLLM Sidebar: Posting updateModelList to webview", models, errorMsg);
+          console.log("VSLLM Sidebar: Posting updateModelList to webview:");
+          if (models && models.length > 0) {
+            models.forEach(m => console.log("  ", JSON.stringify(m)));
+          } else {
+            console.log("  No models available.");
+          }
+          if (errorMsg) {
+            console.log("  Error:", errorMsg);
+          }
           if (models && models.length > 0) {
             this.webviewView.webview.postMessage({ command: 'updateModelList', models });
           } else {

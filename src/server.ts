@@ -20,6 +20,8 @@ class VsCodeLmHandler {
     );
     
     const models = await Promise.race([modelsPromise, timeoutPromise]);
+    // in console, log all available models' name
+    console.log("VSLLM Server: Available models", models.map(m => m.name));
     let model: vscode.LanguageModelChat | undefined;
     if (selectedModelId) {
       model = models.find(m => m.id === selectedModelId);
