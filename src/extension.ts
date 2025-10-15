@@ -2,77 +2,21 @@ import * as vscode from "vscode";
 import { startVsllmServer, stopVsllmServer } from "./server";
 const fetch = require('node-fetch');
 
-// Helper to always return a usable model (real or fallback)
-async function createClient(selector: any): Promise<any> {
-  try {
-    const models = await vscode.lm.selectChatModels(selector);
-    if (models && Array.isArray(models) && models.length > 0) {
-      return models[0];
-    }
-    // Fallback minimal model
-    return {
-      id: "default-lm",
-      name: "Default Language Model",
-      vendor: "vscode",
-      family: "lm",
-      version: "1.0",
-      maxInputTokens: 8192,
-      sendRequest: async (messages: any, options: any, token: any) => {
-        return {
-          stream: (async function* () {
-            yield "Language model functionality is limited. Please check VS Code configuration.";
-          })(),
-          text: (async function* () {
-            yield "Language model functionality is limited. Please check VS Code configuration.";
-          })(),
-        };
-      },
-      countTokens: async () => 0,
-    };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    throw new Error(`VSLLM <Language Model API>: Failed to select model: ${errorMessage}`);
-  }
-}
+
 // ...existing code...
 // VSLLM Server VSCode extension entrypoint with configuration and lifecycle commands
 
 // ...existing code...
 
-let serverInstance: any = null;
-// ...existing code...
-// Returns HTML for the configuration Webview
 
 function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.ExtensionContext): string {
-  // Get current config values, try reading vsllmServer.json first
-  let url = "http://localhost";
-  let port = 8081;
-  let model = "";
-  let apiKey = "";
-  let enableLogging = false;
-  try {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (workspaceFolders && workspaceFolders.length > 0) {
-      const wsPath = workspaceFolders[0].uri.fsPath;
-      const configFilePath = wsPath + "/vsllmServer.json";
-      const fs = require('fs');
-      if (fs.existsSync(configFilePath)) {
-        const raw = fs.readFileSync(configFilePath, 'utf8');
-        try {
-          const json = JSON.parse(raw);
-          url = json.url || url;
-          port = json.port || port;
-          model = json.model || model;
-          apiKey = json.apiKey || apiKey;
-          enableLogging = json.enableLogging || enableLogging;
-        } catch (jsonErr) {
-          console.error("VSLLM Server: Invalid config file, using defaults.", jsonErr);
-        }
-      }
-    }
-  } catch (err) {
-    console.error("VSLLM Server: Error reading config file, using defaults.", err);
-  }
+  // Get current config values from VS Code settings
+  const config = vscode.workspace.getConfiguration('vsllmServer');
+  let url = config.get<string>('url', 'http://localhost');
+  let port = config.get<number>('port', 8080);
+  let model = config.get<string>('model', '');
+  let apiKey = config.get<string>('apiKey', '');
+  let enableLogging = config.get<boolean>('enableLogging', false);
   // Always show 'listing...' initially, will be replaced asynchronously
   let modelOptions = "<option value=''>Loading models...</option>";
   // Basic HTML/JS/CSS for the config form
@@ -353,9 +297,9 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
       }
     });
   }
-  async refreshWebview() {
+  refreshWebview() {
     if (this.webviewView) {
-      this.webviewView.webview.html = await getConfigWebviewHtml(this.webviewView.webview, this.context);
+      this.webviewView.webview.html = getConfigWebviewHtml(this.webviewView.webview, this.context);
     }
   }
 }

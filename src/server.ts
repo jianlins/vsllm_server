@@ -14,7 +14,7 @@ class VsCodeLmHandler {
     const selectedModelId = config.get<string>("model", "");
     
     // Add timeout protection for selectChatModels
-    const modelsPromise = vscode.lm.selectChatModels({});
+    const modelsPromise = vscode.lm.selectChatModels({ vendor: "copilot" });
     const timeoutPromise = new Promise<never>((_, reject) => 
       setTimeout(() => reject(new Error("Model selection timeout after 10s")), 10000)
     );
@@ -74,12 +74,25 @@ export async function startVsllmServer(
           const payload = JSON.parse(body);
           const messages = payload.messages || [];
           const completion = await handler.chatCompletion(messages);
+          const config = vscode.workspace.getConfiguration("vsllmServer");
+          const selectedModelId = config.get<string>("model", "");
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(
             JSON.stringify({
               id: "vsllm-chat",
               object: "chat.completion",
-              choices: [{ message: { role: "assistant", content: completion } }],
+              created: Math.floor(Date.now() / 1000),
+              model: selectedModelId,
+              choices: [{
+                index: 0,
+                message: { role: "assistant", content: completion },
+                finish_reason: "stop"
+              }],
+              usage: {
+                prompt_tokens: 0, // Placeholder, actual counting not implemented
+                completion_tokens: 0,
+                total_tokens: 0
+              }
             })
           );
         } catch (err) {
