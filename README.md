@@ -3,6 +3,14 @@
 Expose VSCode chat models as an OpenAI-compatible API endpoint. This extension provides a local HTTP server with a `/v1/chat/completions` endpoint, powered by VS Code's Language Model API.
 
 
+## New in 0.0.3
+- **Full OpenAI API compatibility**: Now works with clients like qwen-code, Continue, and other OpenAI-compatible tools
+- **Streaming support**: Added Server-Sent Events (SSE) streaming for `stream: true` requests
+- **Flexible message content formats**: Supports both string content and array content formats (multimodal-style)
+- **New `/v1/models` endpoint**: List available models via GET request
+- **CORS support**: Cross-origin requests are now supported
+- **Improved error handling**: Better error responses following OpenAI API error format
+
 ## New in 0.0.2
 - Modern esbuild build pipeline for faster, reliable TypeScript builds
 - Extension and server configuration now fully align with VS Code settings (model, URL, port, etc.)
@@ -54,6 +62,52 @@ All options are available in the VSLLM Server sidebar panel or in VS Code settin
 - Use the VSLLM Server sidebar icon to start, stop, restart the server, and open the configuration panel.
 - Configure all options in the sidebar or in the settings panel under "VSLLM Server Configuration".
 - Access the API at `http://localhost:8801/v1/chat/completions` (or your configured URL/port).
+
+## Using with OpenAI-Compatible Clients
+
+This extension exposes VS Code's Copilot models as an OpenAI-compatible API. You can use any OpenAI client library or tool by pointing it to the VSLLM Server URL.
+
+### Python (OpenAI SDK)
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8801/v1",
+    api_key="not-needed"  # API key is optional
+)
+
+response = client.chat.completions.create(
+    model="vsllm-copilot",
+    messages=[{"role": "user", "content": "Hello!"}],
+    stream=True  # Streaming supported
+)
+
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
+```
+
+### qwen-code / Continue / Other Extensions
+Set your OpenAI base URL to point to VSLLM Server:
+```
+OPENAI_BASE_URL=http://localhost:8801/v1
+```
+
+### curl
+```bash
+# Non-streaming
+curl http://localhost:8801/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hello!"}]}'
+
+# Streaming
+curl http://localhost:8801/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hello!"}], "stream": true}'
+
+# List models
+curl http://localhost:8801/v1/models
+```
 
 ## License
 MIT

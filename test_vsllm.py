@@ -1,6 +1,6 @@
 import requests
 
-url = "http://localhost:4000/v1/chat/completions"
+url = "http://localhost:8801/v1/chat/completions"
 payload = {
     "messages": [
         {"role": "user", "content": "Hello, VSLLM!"}
