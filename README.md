@@ -206,6 +206,8 @@ npm ci
 npm run vsix
 ```
 
+For project structure, architecture, and internals, see the [Developer Guide](./DEVELOPER.md).
+
 Releases are automated by the [Build and Release VSIX](.github/workflows/release.yml) workflow:
 
 - **Tagged push** — pushing a tag that matches `v*` (for example `v0.0.5`) builds the extension and creates a GitHub release with the `.vsix` attached. The tag must match the `version` in `package.json`, otherwise the workflow fails.
