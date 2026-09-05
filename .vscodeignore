@@ -2,15 +2,18 @@
 node_modules/
 .vscode/
 .git/
+.github/
+.idea/
 *.log
 *.py
 *.vsix
 *.md
 src/
 test/
-LICENSE*
-README*
 tsconfig.json
 package-lock.json
-# Keep resources/ folder for icons and assets
+esbuild.js
+reproduce_issue.js
+.gitignore
+# Keep LICENSE, resources/ (icons and assets) and docs/ (README images)
 # Keep only out/ folder with compiled code

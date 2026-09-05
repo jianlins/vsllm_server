@@ -3,6 +3,11 @@
 Expose VSCode chat models as an OpenAI-compatible API endpoint. This extension provides a local HTTP server with a `/v1/chat/completions` endpoint, powered by VS Code's Language Model API.
 
 
+## New in 0.0.4
+- **Automated releases**: GitHub Actions workflow builds the `.vsix` and publishes it to GitHub Releases on tagged pushes or manual runs
+- **Proper extension identity**: added the missing `publisher` field, so packaged VSIX files are no longer marked with an `undefined` publisher
+- **Leaner package**: the VSIX now ships the LICENSE and excludes build/dev-only files
+
 ## New in 0.0.3
 - **Full OpenAI API compatibility**: Now works with clients like qwen-code, Continue, and other OpenAI-compatible tools
 - **Streaming support**: Added Server-Sent Events (SSE) streaming for `stream: true` requests
@@ -44,7 +49,7 @@ code .  # then start VS Code from the activated environment
 This ensures the extension can properly compile TypeScript and run without getting stuck in "activating" state.
 
 ## Installation
-1. Download or build the `.vsix` package.
+1. Download the `.vsix` package from the [Releases page](https://github.com/jianlins/vsllm_server/releases), or build it yourself (see [Building and releasing](#building-and-releasing)).
 2. In VS Code, open the command palette (`Ctrl+Shift+P`) and run `Extensions: Install from VSIX...`.
 3. Select the `.vsix` file to install.
 4. After installation, look for the VSLLM Server icon in the sidebar to access all features.
@@ -107,6 +112,29 @@ curl http://localhost:8801/v1/chat/completions \
 
 # List models
 curl http://localhost:8801/v1/models
+```
+
+## Building and releasing
+
+Build a `.vsix` locally:
+
+```bash
+npm ci
+npm run vsix
+```
+
+Releases are automated by the [Build and Release VSIX](.github/workflows/release.yml) workflow:
+
+- **Tagged push** — pushing a tag that matches `v*` (for example `v0.0.4`) builds the extension and creates a GitHub release with the `.vsix` attached. The tag must match the `version` in `package.json`, otherwise the workflow fails.
+- **Manual run** — trigger the workflow from the Actions tab. By default it only builds and uploads the `.vsix` as a workflow artifact; enable the `release` input to also publish a GitHub release (optionally with a custom `tag` and a `prerelease` flag).
+
+Typical release flow:
+
+```bash
+# bump "version" in package.json, then:
+git commit -am "Release 0.0.4"
+git tag v0.0.4
+git push origin main --tags
 ```
 
 ## License
