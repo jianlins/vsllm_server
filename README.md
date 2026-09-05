@@ -3,7 +3,7 @@
 Expose VSCode chat models as an OpenAI-compatible API endpoint. This extension provides a local HTTP server with a `/v1/chat/completions` endpoint, powered by VS Code's Language Model API.
 
 
-## New in 0.0.4
+## New in 0.0.5
 - **Tool / function calling support**: OpenAI `tools` are forwarded to the VS Code Language Model API and `tool_calls` are returned to the client (both streaming and non-streaming), with `finish_reason: "tool_calls"`. This is what agent clients such as **opencode**, Cline, Aider or Continue need in order to actually run tools instead of stopping after the first sentence.
 - **Full tool round-trip**: assistant `tool_calls` and `role: "tool"` results sent back by the client are converted into `LanguageModelToolCallPart` / `LanguageModelToolResultPart` instead of being flattened into text.
 - **Traffic Monitor GUI**: a new panel (`VSLLM Server: Open Traffic Monitor`) shows every request in and out — payloads, streamed chunks, tool calls, timings, bytes, warnings and errors.
@@ -13,6 +13,8 @@ Expose VSCode chat models as an OpenAI-compatible API endpoint. This extension p
 - **Correct model selection**: an explicitly requested `model` is honoured, and an unknown one returns 404 instead of silently answering with a different model.
 - **Better diagnostics**: port conflicts, invalid JSON, unsupported content parts, empty model responses and unknown routes are surfaced instead of failing silently.
 - **Integration tests**: `test_vsllm.py` plus `requirements-dev.txt`.
+- **API key kept out of source control**: `vsllmServer.apiKey` is machine-scoped, so it can no longer be written into a committed `.vscode/settings.json`.
+- **Packaging fix**: the manifest was missing a `publisher`, so the VSIX installed as `undefined_publisher.vsllm-server` next to any existing install instead of replacing it, leaving two copies racing for the port.
 
 ## New in 0.0.3
 - **Full OpenAI API compatibility**: Now works with clients like qwen-code, Continue, and other OpenAI-compatible tools
@@ -67,7 +69,7 @@ All options are available in the VSLLM Server sidebar panel or in VS Code settin
 - **Server URL**: Set the base URL (default: `http://localhost`).
 - **Bind Address** (`vsllmServer.host`): interface to listen on (default: `127.0.0.1`, this machine only).
 - **Server Port**: Set the port number (default: `8801`).
-- **API Key**: Optional; when set, clients must send `Authorization: Bearer <key>`.
+- **API Key**: Optional; when set, clients must authenticate. Stored in your **user** settings, never in `.vscode/settings.json`.
 - **Allowed CORS Origins** (`vsllmServer.allowedOrigins`): empty by default, so no CORS headers are sent.
 - **Max Request Size** (`vsllmServer.maxRequestBytes`): default 1 MiB.
 - **Enable Logging**: Toggle verbose logging (writes to the "VSLLM Server" output channel).
@@ -80,6 +82,7 @@ The server exposes your Copilot session over plain HTTP, so treat it like a cred
 
 - **It listens on `127.0.0.1` by default**, reachable only from this machine. Setting `vsllmServer.host` to `0.0.0.0` exposes the API to every machine on your network — only do that together with an API key. The extension warns you when it binds a non-loopback address.
 - **Set `vsllmServer.apiKey`** to require `Authorization: Bearer <key>` on every request (compared in constant time). With a blank key the server accepts any local request without authentication.
+- **The API key lives in your user settings.** It is a machine-scoped setting, so it cannot be set from `.vscode/settings.json` — that file is usually committed, and a key placed there would leak into source control. Saving from the sidebar writes it to user settings and clears any stale workspace copy.
 - **CORS is disabled by default.** Until you list origins in `vsllmServer.allowedOrigins`, browsers cannot read responses, which prevents arbitrary web pages you visit from driving your Copilot session. Use `*` only alongside an API key.
 - **Request bodies are capped** at `vsllmServer.maxRequestBytes` (1 MiB by default); larger requests get HTTP 413.
 - The traffic monitor **redacts the `Authorization` header** in captured requests, so exported logs do not leak your key.

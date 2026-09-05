@@ -99,7 +99,8 @@
         "vsllmServer.apiKey": {
           "type": "string",
           "default": "",
-          "markdownDescription": "**API Key**\nWhen set, clients must send `Authorization: Bearer <key>`. Leave blank to accept unauthenticated requests (safe only while bound to loopback)."
+          "scope": "machine",
+          "markdownDescription": "**API Key**\nWhen set, clients must send `Authorization: Bearer <key>`. Leave blank to accept unauthenticated requests (safe only while bound to loopback).\n\nStored in your **user** settings — avoid putting it in `.vscode/settings.json`, which is usually committed."
         },
         "vsllmServer.allowedOrigins": {
           "type": "array",

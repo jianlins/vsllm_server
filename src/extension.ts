@@ -228,7 +228,19 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
         await config.update('model', message.model, vscode.ConfigurationTarget.Workspace);
         await config.update('url', message.url, vscode.ConfigurationTarget.Workspace);
         await config.update('port', message.port, vscode.ConfigurationTarget.Workspace);
-        await config.update('apiKey', message.apiKey, vscode.ConfigurationTarget.Workspace);
+        // The API key goes to user settings: .vscode/settings.json is often committed.
+        await config.update('apiKey', message.apiKey, vscode.ConfigurationTarget.Global);
+        try {
+          if (config.inspect<string>('apiKey')?.workspaceValue !== undefined) {
+            await config.update('apiKey', undefined, vscode.ConfigurationTarget.Workspace);
+            vscode.window.showWarningMessage(
+              'Removed vsllmServer.apiKey from workspace settings and stored it in your user settings, ' +
+              'because .vscode/settings.json is usually tracked by source control.'
+            );
+          }
+        } catch {
+          // The setting is machine-scoped, so a stale workspace entry is ignored anyway.
+        }
         await config.update('enableLogging', message.enableLogging, vscode.ConfigurationTarget.Workspace);
         vscode.window.showInformationMessage('VSLLM Server configuration updated.');
       } else if (message.command === 'startServer') {
