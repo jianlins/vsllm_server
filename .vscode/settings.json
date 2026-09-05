@@ -7,5 +7,9 @@
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
     "python-envs.pythonProjects": [],
+    "vsllmServer.model": "claude-opus-4.7",
+    "vsllmServer.url": "http://localhost",
+    "vsllmServer.port": 8801,
+    "vsllmServer.enableLogging": false,
 
 }
