@@ -57,7 +57,7 @@ code .  # then start VS Code from the activated environment
 This ensures the extension can properly compile TypeScript and run without getting stuck in "activating" state.
 
 ## Installation
-1. Download or build the `.vsix` package.
+1. Download the `.vsix` package from the [Releases page](https://github.com/jianlins/vsllm_server/releases), or build it yourself (see [Building and releasing](#building-and-releasing)).
 2. In VS Code, open the command palette (`Ctrl+Shift+P`) and run `Extensions: Install from VSIX...`.
 3. Select the `.vsix` file to install.
 4. After installation, look for the VSLLM Server icon in the sidebar to access all features.
@@ -196,6 +196,71 @@ python test_vsllm.py        # verbose manual smoke run
 
 Set `VSLLM_BASE_URL` to target a non-default address, and `VSLLM_API_KEY` when the server
 has an API key configured.
+
+## Building and releasing
+
+Build a `.vsix` locally:
+
+```bash
+npm ci
+npm run vsix
+```
+
+Releases are automated by the [Build and Release VSIX](.github/workflows/release.yml) workflow:
+
+- **Tagged push** — pushing a tag that matches `v*` (for example `v0.0.5`) builds the extension and creates a GitHub release with the `.vsix` attached. The tag must match the `version` in `package.json`, otherwise the workflow fails.
+- **Manual run** — trigger the workflow from the Actions tab. By default it only builds and uploads the `.vsix` as a workflow artifact; enable the `release` input to also publish a GitHub release (optionally with a custom `tag` and a `prerelease` flag), and the `marketplace` input to publish to the VS Code Marketplace.
+
+Typical release flow:
+
+```bash
+# bump "version" in package.json, then:
+git commit -am "Release 0.0.5"
+git tag v0.0.5
+git push origin main --tags
+```
+
+### Publishing to the VS Code Marketplace
+
+The workflow can also publish to the [VS Code Marketplace](https://marketplace.visualstudio.com/vscode). It publishes the exact `.vsix` built earlier in the same run, so the Marketplace and the GitHub release always ship identical bytes.
+
+**Publishing is disabled by default.** The `publish` job is skipped unless the repository variable `MARKETPLACE_PUBLISH` is set to `true`, so nothing reaches the Marketplace until you deliberately opt in.
+
+One-time setup:
+
+1. **Create a publisher** at the [publisher management page](https://marketplace.visualstudio.com/manage) and make sure its ID matches the `publisher` field in `package.json` (currently `jianlins`).
+2. **Choose an authentication method** and configure it (see below).
+3. **Enable publishing:** `gh variable set MARKETPLACE_PUBLISH --body true`.
+
+Once enabled, a tagged push publishes automatically, and manual runs publish only when the `marketplace` input is checked.
+
+#### Authentication: Personal Access Token (default)
+
+Create an Azure DevOps PAT with **Marketplace → Manage** scope for **All accessible organizations**, then store it:
+
+```bash
+gh secret set VSCE_PAT
+```
+
+#### Authentication: Microsoft Entra ID (recommended)
+
+Microsoft is phasing out long-lived PATs, so the workflow also supports [workload identity federation](https://code.visualstudio.com/api/working-with-extensions/publishing-extension), which uses a short-lived OIDC token instead of a stored credential.
+
+1. Register a Microsoft Entra application and add a **federated credential** for GitHub Actions — issuer `https://token.actions.githubusercontent.com`, subject `repo:jianlins/vsllm_server:ref:refs/tags/*` (or an environment/branch subject), audience `api://AzureADTokenExchange`.
+2. Add the application's service principal as a member of your Marketplace publisher.
+3. Configure the repository:
+
+```bash
+gh variable set VSCE_AUTH_METHOD --body azure
+gh secret set AZURE_CLIENT_ID
+gh secret set AZURE_TENANT_ID
+```
+
+The job already requests the `id-token: write` permission needed for OIDC.
+
+#### Gating publishes with an approval
+
+The `publish` job runs in a GitHub environment named `marketplace`. Adding **required reviewers** to that environment under *Settings → Environments* turns every Marketplace publish into a manual approval, while GitHub releases continue to be created automatically.
 
 ## License
 MIT

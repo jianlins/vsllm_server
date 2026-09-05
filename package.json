@@ -177,12 +177,14 @@
     "compile": "npm run check-types && node esbuild.js",
     "check-types": "tsc --noEmit",
     "watch": "node esbuild.js --watch",
-    "package": "npm run check-types && node esbuild.js --production"
+    "package": "npm run check-types && node esbuild.js --production",
+    "vsix": "vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/node-fetch": "^2.6.13",
     "@types/vscode": "^1.1.37",
+    "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.25.11",
     "typescript": "^5.0.0"
   },

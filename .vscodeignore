@@ -2,6 +2,7 @@
 node_modules/
 .vscode/
 .git/
+.github/
 .idea/
 *.log
 *.py
@@ -9,15 +10,15 @@ node_modules/
 *.md
 src/
 test/
-LICENSE*
-README*
 tsconfig.json
 package-lock.json
 requirements-dev.txt
 esbuild.js
+reproduce_issue.js
+.gitignore
 __pycache__/
 .pytest_cache/
 out/**/*.map
 out/server.js
-# Keep resources/ folder for icons and assets
+# Keep LICENSE, resources/ (icons and assets) and docs/ (README images)
 # Keep only out/ folder with compiled code

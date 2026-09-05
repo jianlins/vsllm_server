@@ -1,0 +1,178 @@
+name: Build and Release VSIX
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish the packaged VSIX as a GitHub release'
+        type: boolean
+        default: false
+      tag:
+        description: 'Tag for the release (defaults to v<version from package.json>)'
+        type: string
+        default: ''
+      prerelease:
+        description: 'Mark the release as a pre-release'
+        type: boolean
+        default: false
+      marketplace:
+        description: 'Also publish to the VS Code Marketplace'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Package VSIX
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      vsix: ${{ steps.meta.outputs.vsix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve version and package name
+        id: meta
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          name="$(node -p "require('./package.json').name")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "vsix=$name-$version.vsix" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches package.json version
+        if: github.event_name == 'push'
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          if [ "$REF_NAME" != "v$VERSION" ]; then
+            echo "::error::Tag '$REF_NAME' does not match package.json version ('v$VERSION'). Bump the version in package.json or retag."
+            exit 1
+          fi
+
+      - name: Type check
+        run: npm run check-types
+
+      - name: Package extension
+        run: npx vsce package --no-dependencies --out "${{ steps.meta.outputs.vsix }}"
+
+      - name: Upload VSIX build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.meta.outputs.vsix }}
+          path: ${{ steps.meta.outputs.vsix }}
+          if-no-files-found: error
+
+      - name: Create or update GitHub release
+        if: github.event_name == 'push' || inputs.release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VSIX: ${{ steps.meta.outputs.vsix }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            tag="$REF_NAME"
+          elif [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="v$VERSION"
+          fi
+
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "Release $tag already exists; uploading/replacing the VSIX asset."
+            gh release upload "$tag" "$VSIX" --clobber
+          else
+            args=(--title "$tag" --generate-notes --target "$GITHUB_SHA")
+            if [ "$PRERELEASE" = "true" ]; then
+              args+=(--prerelease)
+            fi
+            gh release create "$tag" "$VSIX" "${args[@]}"
+          fi
+
+          echo "Released \`$VSIX\` to [$tag]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$tag)" >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish to VS Code Marketplace
+    needs: build
+    # Opt-in: set the repository variable MARKETPLACE_PUBLISH to 'true' to enable.
+    if: >-
+      vars.MARKETPLACE_PUBLISH == 'true'
+      && (github.event_name == 'push' || inputs.marketplace)
+    runs-on: ubuntu-latest
+    # Auto-created on first run; add required reviewers here to gate publishing.
+    environment: marketplace
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      # Installs the same pinned @vscode/vsce used to build the package.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download the VSIX built in this run
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build.outputs.vsix }}
+
+      # Microsoft Entra ID via workload identity federation (no long-lived secret).
+      - name: Log in to Azure
+        if: vars.VSCE_AUTH_METHOD == 'azure'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Publish (Microsoft Entra ID)
+        if: vars.VSCE_AUTH_METHOD == 'azure'
+        env:
+          VSIX: ${{ needs.build.outputs.vsix }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: npx vsce publish --packagePath "$VSIX" --azure-credential --skip-duplicate
+
+      - name: Publish (Personal Access Token)
+        if: vars.VSCE_AUTH_METHOD != 'azure'
+        env:
+          VSIX: ${{ needs.build.outputs.vsix }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::error::Secret VSCE_PAT is not set. Add it, or set the repository variable VSCE_AUTH_METHOD to 'azure' to publish with Microsoft Entra ID."
+            exit 1
+          fi
+          npx vsce publish --packagePath "$VSIX" --skip-duplicate
+
+      - name: Summary
+        env:
+          VSIX: ${{ needs.build.outputs.vsix }}
+        run: echo "Published \`$VSIX\` to the VS Code Marketplace." >> "$GITHUB_STEP_SUMMARY"
