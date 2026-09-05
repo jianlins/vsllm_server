@@ -2,6 +2,7 @@
 node_modules/
 .vscode/
 .git/
+.idea/
 *.log
 *.py
 *.vsix
@@ -12,5 +13,9 @@ LICENSE*
 README*
 tsconfig.json
 package-lock.json
+requirements-dev.txt
+esbuild.js
+out/**/*.map
+out/server.js
 # Keep resources/ folder for icons and assets
 # Keep only out/ folder with compiled code
