@@ -18,6 +18,10 @@ on:
         description: 'Mark the release as a pre-release'
         type: boolean
         default: false
+      marketplace:
+        description: 'Also publish to the VS Code Marketplace'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -26,6 +30,9 @@ jobs:
   build:
     name: Package VSIX
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      vsix: ${{ steps.meta.outputs.vsix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -103,3 +110,69 @@ jobs:
           fi
 
           echo "Released \`$VSIX\` to [$tag]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$tag)" >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish to VS Code Marketplace
+    needs: build
+    # Opt-in: set the repository variable MARKETPLACE_PUBLISH to 'true' to enable.
+    if: >-
+      vars.MARKETPLACE_PUBLISH == 'true'
+      && (github.event_name == 'push' || inputs.marketplace)
+    runs-on: ubuntu-latest
+    # Auto-created on first run; add required reviewers here to gate publishing.
+    environment: marketplace
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      # Installs the same pinned @vscode/vsce used to build the package.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download the VSIX built in this run
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build.outputs.vsix }}
+
+      # Microsoft Entra ID via workload identity federation (no long-lived secret).
+      - name: Log in to Azure
+        if: vars.VSCE_AUTH_METHOD == 'azure'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Publish (Microsoft Entra ID)
+        if: vars.VSCE_AUTH_METHOD == 'azure'
+        env:
+          VSIX: ${{ needs.build.outputs.vsix }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: npx vsce publish --packagePath "$VSIX" --azure-credential --skip-duplicate
+
+      - name: Publish (Personal Access Token)
+        if: vars.VSCE_AUTH_METHOD != 'azure'
+        env:
+          VSIX: ${{ needs.build.outputs.vsix }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::error::Secret VSCE_PAT is not set. Add it, or set the repository variable VSCE_AUTH_METHOD to 'azure' to publish with Microsoft Entra ID."
+            exit 1
+          fi
+          npx vsce publish --packagePath "$VSIX" --skip-duplicate
+
+      - name: Summary
+        env:
+          VSIX: ${{ needs.build.outputs.vsix }}
+        run: echo "Published \`$VSIX\` to the VS Code Marketplace." >> "$GITHUB_STEP_SUMMARY"
