@@ -3,6 +3,14 @@
 Expose VSCode chat models as an OpenAI-compatible API endpoint. This extension provides a local HTTP server with a `/v1/chat/completions` endpoint, powered by VS Code's Language Model API.
 
 
+## New in 0.0.4
+- **Tool / function calling support**: OpenAI `tools` are forwarded to the VS Code Language Model API and `tool_calls` are returned to the client (both streaming and non-streaming), with `finish_reason: "tool_calls"`. This is what agent clients such as **opencode**, Cline, Aider or Continue need in order to actually run tools instead of stopping after the first sentence.
+- **Full tool round-trip**: assistant `tool_calls` and `role: "tool"` results sent back by the client are converted into `LanguageModelToolCallPart` / `LanguageModelToolResultPart` instead of being flattened into text.
+- **Traffic Monitor GUI**: a new panel (`VSLLM Server: Open Traffic Monitor`) shows every request in and out — payloads, streamed chunks, tool calls, timings, bytes, warnings and errors.
+- **Status bar counter** with live request/error counts that opens the monitor.
+- **More forgiving routing**: `/chat/completions`, trailing slashes and query strings are accepted, `/health` returns a status document, and `/v1/models` now lists the real Copilot models.
+- **Better diagnostics**: port conflicts, invalid JSON, empty model responses and unknown routes are surfaced instead of failing silently.
+
 ## New in 0.0.3
 - **Full OpenAI API compatibility**: Now works with clients like qwen-code, Continue, and other OpenAI-compatible tools
 - **Streaming support**: Added Server-Sent Events (SSE) streaming for `stream: true` requests
@@ -56,7 +64,35 @@ All options are available in the VSLLM Server sidebar panel or in VS Code settin
 - **Server URL**: Set the base URL (default: `http://localhost`).
 - **Server Port**: Set the port number (default: `8801`).
 - **API Key**: Optional authentication key.
-- **Enable Logging**: Toggle verbose logging.
+- **Enable Logging**: Toggle verbose logging (writes to the "VSLLM Server" output channel).
+- **Enable Tool Calling** (`vsllmServer.enableToolCalling`, default `true`): forward client tool definitions to the model. Turn this off only to reproduce the "agent stops after one message" behaviour.
+- **Monitor History Size / Capture Bodies / Body Capture Limit**: control how much traffic the monitor keeps in memory.
+
+## Traffic Monitor
+
+Open it from the sidebar button **📊 Open Traffic Monitor**, the view title icon, the status bar entry, or the command palette (`VSLLM Server: Open Traffic Monitor`).
+
+The monitor shows, live:
+
+- every HTTP request the extension receives (method, path, client address, user agent, headers)
+- the raw request body plus a decoded summary: message count and roles, prompt size, `stream` flag, tools offered by the client, `tool_choice`
+- which VS Code model was actually selected for the request
+- the streamed model text as it arrives, chunk count, time-to-first-token and total duration
+- tool calls returned to the client, with their arguments
+- bytes in / bytes out per request and in aggregate
+- `finish_reason`, HTTP status, errors, and warnings that explain protocol problems
+- a per-request timeline of every step
+
+Controls: pause/resume capture, clear, filter (matches paths, bodies, tool names, errors), "problems only", and **Export JSON** to save the whole capture for sharing or offline analysis.
+
+### Debugging an agent client that stops early
+
+If a client such as opencode prints one sentence ("Let me fetch the repo...") and then stops, open the monitor and look at the last request:
+
+- **tools offered by client** is non-empty but **tool calls returned** is `0` → the model answered with plain text. Check that `vsllmServer.enableToolCalling` is on; the monitor adds an explicit warning when it is off.
+- **finish reason** should be `tool_calls` whenever the model wants to run a tool. `stop` means the turn really ended.
+- A `404` record means the client's base URL is wrong (it must point at `http://localhost:<port>/v1`).
+- An error record shows the exact message from the VS Code Language Model API (consent, quota, context length, ...).
 
 ## Usage
 - Use the VSLLM Server sidebar icon to start, stop, restart the server, and open the configuration panel.
@@ -66,6 +102,25 @@ All options are available in the VSLLM Server sidebar panel or in VS Code settin
 ## Using with OpenAI-Compatible Clients
 
 This extension exposes VS Code's Copilot models as an OpenAI-compatible API. You can use any OpenAI client library or tool by pointing it to the VSLLM Server URL.
+
+### opencode
+
+Add the server as an OpenAI-compatible provider in `opencode.json` (use the model id shown by `GET /v1/models`, e.g. `gpt-4o`):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "vsllm": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "http://localhost:8801/v1" },
+      "models": { "gpt-4o": { "name": "Copilot via VSLLM" } }
+    }
+  }
+}
+```
+
+Tool calling must stay enabled (`vsllmServer.enableToolCalling`, on by default) — otherwise opencode receives a plain text answer with `finish_reason: "stop"` and ends the turn right after the model announces what it is about to do.
 
 ### Python (OpenAI SDK)
 ```python

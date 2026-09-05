@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 import { startVsllmServer, stopVsllmServer } from "./server";
+import { MonitorPanel } from "./monitorPanel";
+import { monitor } from "./monitor";
 const fetch = require('node-fetch');
 
 
@@ -97,6 +99,8 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
         <button id="stopServerBtn" type="button">Stop Server</button>
         <button id="testServerBtn" type="button">Test Server</button>
       </div>
+      <button id="openMonitorBtn" type="button" style="width:100%;margin-top:8px;">📊 Open Traffic Monitor</button>
+      <div id="liveStats" style="margin-top:8px;font-size:0.78em;opacity:.8;line-height:1.5;"></div>
       <textarea id="serverResponse" readonly placeholder="Server response will appear here..."></textarea>
       <script>
         const vscode = acquireVsCodeApi();
@@ -133,10 +137,20 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
         document.getElementById('testServerBtn').addEventListener('click', function() {
           vscode.postMessage({ command: 'testServer' });
         });
+        document.getElementById('openMonitorBtn').addEventListener('click', function() {
+          vscode.postMessage({ command: 'openMonitor' });
+        });
         window.addEventListener('message', event => {
           const message = event.data;
           if (message.command === 'showServerResponse') {
             document.getElementById('serverResponse').value = message.text;
+          }
+          if (message.command === 'updateStats') {
+            var s = message.stats;
+            document.getElementById('liveStats').textContent =
+              'Requests: ' + s.totalRequests + ' · in flight: ' + s.activeRequests +
+              ' · errors: ' + s.errorRequests + ' | ' +
+              'In: ' + s.bytesIn + ' B · Out: ' + s.bytesOut + ' B · tool calls: ' + s.toolCallsEmitted;
           }
           if (message.command === 'updateModelList') {
             const modelSelect = document.getElementById('model');
@@ -183,6 +197,7 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
 class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'vsllmServerView';
   private webviewView?: vscode.WebviewView;
+  private statsSubscribed = false;
   constructor(private readonly context: vscode.ExtensionContext) {}
   async resolveWebviewView(webviewView: vscode.WebviewView) {
     this.webviewView = webviewView;
@@ -195,6 +210,17 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
         this.webviewView.webview.postMessage({ command: 'updateModelList', models: this.context.globalState.get<any[]>("vsllmServer.models", []) });
       }
     }, 100);
+    // Mirror live traffic counters into the sidebar so the user notices activity without opening the panel.
+    if (!this.statsSubscribed) {
+      this.statsSubscribed = true;
+      this.context.subscriptions.push(
+        monitor.onDidChange((event) => {
+          if ((event.type === 'upsert' || event.type === 'cleared') && this.webviewView?.visible) {
+            this.webviewView.webview.postMessage({ command: 'updateStats', stats: event.stats });
+          }
+        })
+      );
+    }
     webviewView.webview.onDidReceiveMessage(async (message) => {
       console.log("VSLLM Sidebar: Received message from webview", message);
       if (message.command === 'saveConfig') {
@@ -209,6 +235,8 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
         await vscode.commands.executeCommand('vsllmServer.startServer');
       } else if (message.command === 'stopServer') {
         await vscode.commands.executeCommand('vsllmServer.stopServer');
+      } else if (message.command === 'openMonitor') {
+        await vscode.commands.executeCommand('vsllmServer.openMonitor');
       } else if (message.command === 'testServer') {
         // Get config
         const config = vscode.workspace.getConfiguration('vsllmServer');
@@ -396,6 +424,26 @@ export function activate(context: vscode.ExtensionContext) {
       }
     })
   );
+
+  // Open traffic monitor command
+  context.subscriptions.push(
+    vscode.commands.registerCommand("vsllmServer.openMonitor", () => {
+      MonitorPanel.show(context);
+    })
+  );
+
+  // Status bar entry: live request counter that opens the monitor.
+  const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  statusItem.command = "vsllmServer.openMonitor";
+  statusItem.tooltip = "VSLLM Server traffic — click to open the monitor";
+  const renderStatus = () => {
+    const { stats, server } = monitor.getSnapshot();
+    const dot = server.running ? "$(radio-tower)" : "$(circle-slash)";
+    statusItem.text = `${dot} VSLLM ${stats.totalRequests}${stats.activeRequests ? ` (${stats.activeRequests} live)` : ""}${stats.errorRequests ? ` $(error)${stats.errorRequests}` : ""}`;
+    statusItem.show();
+  };
+  renderStatus();
+  context.subscriptions.push(statusItem, monitor.onDidChange(renderStatus));
 
   // Register the sidebar view provider
   try {

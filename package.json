@@ -2,7 +2,7 @@
   "name": "vsllm-server",
   "displayName": "VSCode LLM Server",
   "description": "Expose VSCode chat models as an OpenAI-compatible API endpoint. Provides a local HTTP server with OpenAI-compatible /v1/chat/completions endpoint, powered by VS Code's Language Model API. Configure URL, port, and control server lifecycle from VS Code.",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "repository": {
     "type": "git",
     "url": "https://github.com/jianlins/vsllm_server.git"
@@ -30,8 +30,52 @@
     "Other"
   ],
   "main": "./out/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
+    "commands": [
+      {
+        "command": "vsllmServer.startServer",
+        "title": "Start Server",
+        "category": "VSLLM Server"
+      },
+      {
+        "command": "vsllmServer.stopServer",
+        "title": "Stop Server",
+        "category": "VSLLM Server"
+      },
+      {
+        "command": "vsllmServer.restartServer",
+        "title": "Restart Server",
+        "category": "VSLLM Server"
+      },
+      {
+        "command": "vsllmServer.selectModel",
+        "title": "List Available Models",
+        "category": "VSLLM Server"
+      },
+      {
+        "command": "vsllmServer.openConfigPanel",
+        "title": "Open Settings",
+        "category": "VSLLM Server"
+      },
+      {
+        "command": "vsllmServer.openMonitor",
+        "title": "Open Traffic Monitor",
+        "category": "VSLLM Server",
+        "icon": "$(pulse)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "vsllmServer.openMonitor",
+          "when": "view == vsllmServerView",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "type": "object",
       "title": "VSLLM Server Configuration",
@@ -60,6 +104,31 @@
           "type": "number",
           "default": 2048,
           "markdownDescription": "**Max Tokens**\nMaximum number of tokens per response."
+        },
+        "vsllmServer.model": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "**Model**\nId of the VS Code chat model to serve (leave blank to use the first available Copilot model)."
+        },
+        "vsllmServer.enableToolCalling": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "**Enable Tool Calling**\nForward OpenAI `tools` definitions to the VS Code language model and return `tool_calls` to the client. Required by agent clients such as opencode, Cline or Aider. Disable only for debugging."
+        },
+        "vsllmServer.monitorMaxRecords": {
+          "type": "number",
+          "default": 200,
+          "markdownDescription": "**Monitor History Size**\nHow many requests the traffic monitor keeps in memory (10-2000)."
+        },
+        "vsllmServer.monitorCaptureBodies": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "**Capture Bodies**\nStore request/response payloads so they can be inspected in the traffic monitor."
+        },
+        "vsllmServer.monitorBodyLimit": {
+          "type": "number",
+          "default": 20000,
+          "markdownDescription": "**Body Capture Limit**\nMaximum number of characters kept per captured request or response body."
         }
       }
     },
