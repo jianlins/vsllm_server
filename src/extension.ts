@@ -15,7 +15,7 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
   // Get current config values from VS Code settings
   const config = vscode.workspace.getConfiguration('vsllmServer');
   let url = config.get<string>('url', 'http://localhost');
-  let port = config.get<number>('port', 8080);
+  let port = config.get<number>('port', 8801);
   let model = config.get<string>('model', '');
   let apiKey = config.get<string>('apiKey', '');
   let enableLogging = config.get<boolean>('enableLogging', false);
@@ -241,11 +241,16 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
         // Get config
         const config = vscode.workspace.getConfiguration('vsllmServer');
         const url = config.get<string>('url', 'http://localhost');
-        const port = config.get<number>('port', 8080);
+        const port = config.get<number>('port', 8801);
+        const apiKey = config.get<string>('apiKey', '').trim();
         try {
+          const testHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+          if (apiKey) {
+            testHeaders['Authorization'] = `Bearer ${apiKey}`;
+          }
           const response = await fetch(`${url}:${port}/v1/chat/completions`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: testHeaders,
             body: JSON.stringify({
               model: config.get<string>('model', ''),
               messages: [{ role: 'user', content: 'Hello!' }],
@@ -341,10 +346,11 @@ export function activate(context: vscode.ExtensionContext) {
       try {
         const config = vscode.workspace.getConfiguration("vsllmServer");
         const url = config.get<string>("url", "http://localhost");
-        const port = config.get<number>("port", 8080);
+        const port = config.get<number>("port", 8801);
         vscode.window.showInformationMessage(`Starting VSLLM Server on ${url}:${port}...`);
         serverInstance = await startVsllmServer(context, { url, port });
       } catch (err) {
+        serverInstance = null;
         console.error("VSLLM Server: startServer error:", err);
       }
     })
@@ -401,7 +407,7 @@ export function activate(context: vscode.ExtensionContext) {
       try {
         const config = vscode.workspace.getConfiguration("vsllmServer");
         const url = config.get<string>("url", "http://localhost");
-        const port = config.get<number>("port", 8080);
+        const port = config.get<number>("port", 8801);
         if (serverInstance) {
           await stopVsllmServer(serverInstance);
           serverInstance = null;
@@ -409,6 +415,7 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage(`Restarting VSLLM Server on ${url}:${port}...`);
         serverInstance = await startVsllmServer(context, { url, port });
       } catch (err) {
+        serverInstance = null;
         console.error("VSLLM Server: restartServer error:", err);
       }
     })

@@ -83,17 +83,35 @@
         "vsllmServer.url": {
           "type": "string",
           "default": "http://localhost",
-          "markdownDescription": "**Server URL**\nThe base URL for the server (e.g., http://localhost)."
+          "markdownDescription": "**Server URL**\nThe base URL advertised for the server (e.g., http://localhost)."
+        },
+        "vsllmServer.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "markdownDescription": "**Bind Address**\nNetwork interface the server listens on. Defaults to `127.0.0.1` so it is reachable only from this machine. Set to `0.0.0.0` to expose it on your network — only do this together with `#vsllmServer.apiKey#`."
         },
         "vsllmServer.port": {
           "type": "number",
-          "default": 8080,
-          "markdownDescription": "**Server Port**\nThe port number for the server (e.g., 8080)."
+          "default": 8801,
+          "markdownDescription": "**Server Port**\nThe port number for the server (e.g., 8801)."
         },
         "vsllmServer.apiKey": {
           "type": "string",
           "default": "",
-          "markdownDescription": "**API Key**\nAuthentication key for the API. Leave blank if not required. This is stored securely by VS Code."
+          "markdownDescription": "**API Key**\nWhen set, clients must send `Authorization: Bearer <key>`. Leave blank to accept unauthenticated requests (safe only while bound to loopback)."
+        },
+        "vsllmServer.allowedOrigins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "**Allowed CORS Origins**\nBrowser origins permitted to call the API, e.g. `https://example.com`. Empty (default) sends no CORS headers, so web pages cannot read responses. Use `*` to allow any origin."
+        },
+        "vsllmServer.maxRequestBytes": {
+          "type": "number",
+          "default": 1048576,
+          "markdownDescription": "**Max Request Size**\nLargest accepted request body in bytes. Larger requests are rejected with HTTP 413."
         },
         "vsllmServer.enableLogging": {
           "type": "boolean",

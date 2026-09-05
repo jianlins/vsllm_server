@@ -8,8 +8,11 @@ Expose VSCode chat models as an OpenAI-compatible API endpoint. This extension p
 - **Full tool round-trip**: assistant `tool_calls` and `role: "tool"` results sent back by the client are converted into `LanguageModelToolCallPart` / `LanguageModelToolResultPart` instead of being flattened into text.
 - **Traffic Monitor GUI**: a new panel (`VSLLM Server: Open Traffic Monitor`) shows every request in and out — payloads, streamed chunks, tool calls, timings, bytes, warnings and errors.
 - **Status bar counter** with live request/error counts that opens the monitor.
+- **Security hardening**: binds `127.0.0.1` by default, enforces `vsllmServer.apiKey` as a Bearer token, makes CORS opt-in, and caps request bodies. See [Security](#security).
 - **More forgiving routing**: `/chat/completions`, trailing slashes and query strings are accepted, `/health` returns a status document, and `/v1/models` now lists the real Copilot models.
-- **Better diagnostics**: port conflicts, invalid JSON, empty model responses and unknown routes are surfaced instead of failing silently.
+- **Correct model selection**: an explicitly requested `model` is honoured, and an unknown one returns 404 instead of silently answering with a different model.
+- **Better diagnostics**: port conflicts, invalid JSON, unsupported content parts, empty model responses and unknown routes are surfaced instead of failing silently.
+- **Integration tests**: `test_vsllm.py` plus `requirements-dev.txt`.
 
 ## New in 0.0.3
 - **Full OpenAI API compatibility**: Now works with clients like qwen-code, Continue, and other OpenAI-compatible tools
@@ -62,11 +65,24 @@ All options are available in the VSLLM Server sidebar panel or in VS Code settin
 
 - **Model Selection**: ⚠️ The settings dropdown for model selection is a placeholder and will show "pending...". To select a model, open the VSLLM Server sidebar panel first. The sidebar will show the latest available models and allow you to select one dynamically.
 - **Server URL**: Set the base URL (default: `http://localhost`).
+- **Bind Address** (`vsllmServer.host`): interface to listen on (default: `127.0.0.1`, this machine only).
 - **Server Port**: Set the port number (default: `8801`).
-- **API Key**: Optional authentication key.
+- **API Key**: Optional; when set, clients must send `Authorization: Bearer <key>`.
+- **Allowed CORS Origins** (`vsllmServer.allowedOrigins`): empty by default, so no CORS headers are sent.
+- **Max Request Size** (`vsllmServer.maxRequestBytes`): default 1 MiB.
 - **Enable Logging**: Toggle verbose logging (writes to the "VSLLM Server" output channel).
 - **Enable Tool Calling** (`vsllmServer.enableToolCalling`, default `true`): forward client tool definitions to the model. Turn this off only to reproduce the "agent stops after one message" behaviour.
 - **Monitor History Size / Capture Bodies / Body Capture Limit**: control how much traffic the monitor keeps in memory.
+
+## Security
+
+The server exposes your Copilot session over plain HTTP, so treat it like a credential:
+
+- **It listens on `127.0.0.1` by default**, reachable only from this machine. Setting `vsllmServer.host` to `0.0.0.0` exposes the API to every machine on your network — only do that together with an API key. The extension warns you when it binds a non-loopback address.
+- **Set `vsllmServer.apiKey`** to require `Authorization: Bearer <key>` on every request (compared in constant time). With a blank key the server accepts any local request without authentication.
+- **CORS is disabled by default.** Until you list origins in `vsllmServer.allowedOrigins`, browsers cannot read responses, which prevents arbitrary web pages you visit from driving your Copilot session. Use `*` only alongside an API key.
+- **Request bodies are capped** at `vsllmServer.maxRequestBytes` (1 MiB by default); larger requests get HTTP 413.
+- The traffic monitor **redacts the `Authorization` header** in captured requests, so exported logs do not leak your key.
 
 ## Traffic Monitor
 
@@ -163,6 +179,20 @@ curl http://localhost:8801/v1/chat/completions \
 # List models
 curl http://localhost:8801/v1/models
 ```
+
+## Testing
+
+`test_vsllm.py` exercises a **running** server (start the extension, then start the server
+from the sidebar). It skips automatically when nothing is listening.
+
+```bash
+pip install -r requirements-dev.txt
+pytest test_vsllm.py        # assertions
+python test_vsllm.py        # verbose manual smoke run
+```
+
+Set `VSLLM_BASE_URL` to target a non-default address, and `VSLLM_API_KEY` when the server
+has an API key configured.
 
 ## License
 MIT

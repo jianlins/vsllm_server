@@ -2,8 +2,94 @@
 
 import * as vscode from "vscode";
 import * as http from "http";
+import * as crypto from "crypto";
 import { IncomingMessage, ServerResponse } from "http";
 import { monitor, TrafficRecord } from "./monitor";
+
+const DEFAULT_HOST = "127.0.0.1";
+const DEFAULT_PORT = 8801;
+const DEFAULT_MAX_REQUEST_BYTES = 1048576;
+const MODEL_SELECTION_TIMEOUT_MS = 10000;
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+
+/** Error carrying the HTTP status and OpenAI error shape to report to the client. */
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly type: string = "invalid_request_error",
+    readonly code?: string
+  ) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
+
+interface RequestConfig {
+  apiKey: string;
+  allowedOrigins: string[];
+  maxRequestBytes: number;
+  modelId: string;
+}
+
+function readRequestConfig(): RequestConfig {
+  const config = vscode.workspace.getConfiguration("vsllmServer");
+  const maxRequestBytes = config.get<number>("maxRequestBytes", DEFAULT_MAX_REQUEST_BYTES);
+  return {
+    apiKey: config.get<string>("apiKey", "").trim(),
+    allowedOrigins: config.get<string[]>("allowedOrigins", []) ?? [],
+    maxRequestBytes:
+      Number.isFinite(maxRequestBytes) && maxRequestBytes > 0 ? maxRequestBytes : DEFAULT_MAX_REQUEST_BYTES,
+    modelId: config.get<string>("model", "").trim(),
+  };
+}
+
+/**
+ * CORS is opt-in: with no configured origins the server emits no CORS headers at all, so a
+ * random web page cannot read responses from the local server.
+ */
+function corsHeadersFor(req: IncomingMessage, cfg: RequestConfig): Record<string, string> {
+  const origin = req.headers.origin;
+  if (!origin || cfg.allowedOrigins.length === 0) {
+    return {};
+  }
+  const allowAll = cfg.allowedOrigins.includes("*");
+  if (!allowAll && !cfg.allowedOrigins.includes(origin)) {
+    return {};
+  }
+  return {
+    "Access-Control-Allow-Origin": allowAll ? "*" : origin,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    Vary: "Origin",
+  };
+}
+
+function timingSafeEquals(a: string, b: string): boolean {
+  const left = Buffer.from(a, "utf8");
+  const right = Buffer.from(b, "utf8");
+  if (left.length !== right.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(left, right);
+}
+
+/** Enforces `vsllmServer.apiKey` when one is configured; a blank key keeps the server open. */
+function assertAuthorized(req: IncomingMessage, cfg: RequestConfig): void {
+  if (!cfg.apiKey) {
+    return;
+  }
+  const header = req.headers.authorization ?? "";
+  const presented = header.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : header.trim();
+  if (!presented || !timingSafeEquals(presented, cfg.apiKey)) {
+    throw new HttpError(
+      401,
+      "Missing or invalid API key. Send it as an 'Authorization: Bearer <key>' header.",
+      "invalid_request_error",
+      "invalid_api_key"
+    );
+  }
+}
 
 type OpenAIContent = string | Array<{ type: string; text?: string; image_url?: any }> | null | undefined;
 
@@ -44,8 +130,21 @@ function extractTextContent(content: OpenAIContent): string {
     return content;
   }
   if (Array.isArray(content)) {
+    // Reject rather than silently drop: dropping an image leaves the model answering about nothing.
+    const unsupported = content.filter(
+      (part) => part && part.type !== "text" && part.type !== "input_text"
+    );
+    if (unsupported.length > 0) {
+      const kinds = [...new Set(unsupported.map((p) => String(p.type)))].join(", ");
+      throw new HttpError(
+        400,
+        `Unsupported message content part(s): ${kinds}. The VS Code Language Model API only accepts text.`,
+        "invalid_request_error",
+        "unsupported_content_part"
+      );
+    }
     return content
-      .filter((part) => part && (part.type === "text" || part.type === "input_text") && part.text)
+      .filter((part) => part && part.text)
       .map((part) => part.text)
       .join("\n");
   }
@@ -72,27 +171,62 @@ function estimateTokens(text: string): number {
 }
 
 class VsCodeLmHandler {
-  async getClient(): Promise<vscode.LanguageModelChat> {
-    const config = vscode.workspace.getConfiguration("vsllmServer");
-    const selectedModelId = config.get<string>("model", "");
+  async listModels(): Promise<vscode.LanguageModelChat[]> {
+    if (!("lm" in vscode) || !vscode.lm?.selectChatModels) {
+      throw new HttpError(
+        503,
+        "The VS Code Language Model API is not available in this environment.",
+        "server_error",
+        "model_unavailable"
+      );
+    }
+    // Always clear the timer, otherwise every request leaks a 10s handle.
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        vscode.lm.selectChatModels({ vendor: "copilot" }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new HttpError(504, "Timed out selecting a VS Code chat model.", "server_error")),
+            MODEL_SELECTION_TIMEOUT_MS
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
 
-    const modelsPromise = vscode.lm.selectChatModels({ vendor: "copilot" });
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Model selection timeout after 10s")), 10000)
-    );
+  /** Resolves the model, honouring an explicit `model` from the request before the configured default. */
+  async getClient(requestedModelId: string | undefined, cfg: RequestConfig): Promise<vscode.LanguageModelChat> {
+    const models = await this.listModels();
+    if (models.length === 0) {
+      throw new HttpError(503, "No VS Code chat models are available.", "server_error", "model_unavailable");
+    }
 
-    const models = await Promise.race([modelsPromise, timeoutPromise]);
-    let model: vscode.LanguageModelChat | undefined;
-    if (selectedModelId) {
-      model = models.find((m) => m.id === selectedModelId) ?? models.find((m) => m.family === selectedModelId);
+    const wanted = (requestedModelId || "").trim();
+    if (wanted && wanted !== "vsllm-copilot") {
+      const match = models.find((m) => m.id === wanted) ?? models.find((m) => m.family === wanted);
+      if (!match) {
+        throw new HttpError(
+          404,
+          `Unknown model '${wanted}'. Available: ${models.map((m) => m.id).join(", ")}.`,
+          "invalid_request_error",
+          "model_not_found"
+        );
+      }
+      return match;
     }
-    if (!model && models.length > 0) {
-      model = models[0];
+
+    if (cfg.modelId) {
+      const configured = models.find((m) => m.id === cfg.modelId) ?? models.find((m) => m.family === cfg.modelId);
+      if (configured) {
+        return configured;
+      }
     }
-    if (!model) {
-      throw new Error("No VSCode chat models available.");
-    }
-    return model;
+    return models[0];
   }
 
   /**
@@ -187,19 +321,21 @@ class VsCodeLmHandler {
     messages: OpenAIMessage[],
     tools: OpenAITool[],
     toolChoice: unknown,
+    requestedModelId: string | undefined,
+    cfg: RequestConfig,
     record: TrafficRecord,
     token: vscode.CancellationToken
   ): AsyncGenerator<StreamPart, void, unknown> {
     const config = vscode.workspace.getConfiguration("vsllmServer");
     const toolsEnabled = config.get<boolean>("enableToolCalling", true);
 
-    const client = await this.getClient();
+    const client = await this.getClient(requestedModelId, cfg);
     monitor.setResolvedModel(record, `${client.id} (${client.vendor}/${client.family}, max in ${client.maxInputTokens})`);
 
     const toolNameMap = new Map<string, string>();
     const vsMessages = this.convertMessages(messages, toolNameMap, record);
     if (vsMessages.length === 0) {
-      throw new Error("Request contained no usable messages.");
+      throw new HttpError(400, "Request contained no usable messages.");
     }
 
     const options: vscode.LanguageModelChatRequestOptions = {
@@ -289,26 +425,325 @@ function collectHeaders(req: IncomingMessage): Record<string, string> {
   return headers;
 }
 
-async function listModels(): Promise<Array<{ id: string; object: string; created: number; owned_by: string }>> {
+async function listModelsPayload(
+  cfg: RequestConfig
+): Promise<Array<{ id: string; object: string; created: number; owned_by: string }>> {
   const created = Math.floor(Date.now() / 1000);
-  try {
-    const models = await vscode.lm.selectChatModels({ vendor: "copilot" });
-    if (models.length > 0) {
-      return models.map((m) => ({ id: m.id, object: "model", created, owned_by: m.vendor || "vsllm-server" }));
-    }
-  } catch {
-    // fall through to the configured model
+  const models = await handler.listModels();
+  if (models.length > 0) {
+    return models.map((m) => ({ id: m.id, object: "model", created, owned_by: m.vendor || "vsllm-server" }));
   }
-  const configured = vscode.workspace.getConfiguration("vsllmServer").get<string>("model", "");
-  return [{ id: configured || "vsllm-copilot", object: "model", created, owned_by: "vsllm-server" }];
+  return [{ id: cfg.modelId || "vsllm-copilot", object: "model", created, owned_by: "vsllm-server" }];
+}
+
+/** Reads the body, refusing anything over the configured cap so a client cannot exhaust memory. */
+function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let settled = false;
+
+    const finish = (fn: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      req.removeListener("data", onData);
+      req.removeListener("end", onEnd);
+      req.removeListener("error", onError);
+      fn();
+    };
+
+    function onData(chunk: Buffer) {
+      total += chunk.length;
+      if (total > maxBytes) {
+        req.pause();
+        finish(() =>
+          reject(
+            new HttpError(
+              413,
+              `Request body exceeds the ${maxBytes} byte limit (see vsllmServer.maxRequestBytes).`,
+              "invalid_request_error",
+              "payload_too_large"
+            )
+          )
+        );
+        return;
+      }
+      chunks.push(chunk);
+    }
+    function onEnd() {
+      finish(() => resolve(Buffer.concat(chunks).toString("utf8")));
+    }
+    function onError(err: Error) {
+      finish(() => reject(new HttpError(499, err.message, "server_error")));
+    }
+
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", onError);
+  });
+}
+
+function errorPayload(err: unknown) {
+  if (err instanceof HttpError) {
+    return { status: err.status, body: { error: { message: err.message, type: err.type, code: err.code } } };
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return { status: 500, body: { error: { message, type: "server_error" } } };
+}
+
+async function handleChatCompletions(
+  req: IncomingMessage,
+  res: ServerResponse,
+  record: TrafficRecord,
+  cfg: RequestConfig,
+  corsHeaders: Record<string, string>
+) {
+  req.on("aborted", () => {
+    monitor.event(record, "aborted", "client closed the connection before the response finished");
+  });
+
+  const cancellation = new vscode.CancellationTokenSource();
+  res.on("close", () => {
+    if (record.state === "active") {
+      cancellation.cancel();
+    }
+  });
+
+  const streamId = `chatcmpl-${Date.now()}`;
+  const created = Math.floor(Date.now() / 1000);
+  let isStreaming = false;
+  let text = "";
+  const toolCalls: Array<{ id: string; name: string; input: object }> = [];
+
+  try {
+    const body = await readBody(req, cfg.maxRequestBytes);
+    monitor.setRequestBody(record, body);
+    if (!body.trim()) {
+      throw new HttpError(400, "Request body is empty; expected a JSON object.");
+    }
+
+    let payload: any;
+    try {
+      payload = JSON.parse(body);
+    } catch (parseErr) {
+      throw new HttpError(
+        400,
+        `Invalid JSON body: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`
+      );
+    }
+
+    const messages: OpenAIMessage[] = Array.isArray(payload.messages) ? payload.messages : [];
+    const tools: OpenAITool[] = Array.isArray(payload.tools) ? payload.tools : [];
+    isStreaming = payload.stream === true;
+    const modelName = payload.model || cfg.modelId || "vsllm-copilot";
+
+    if (messages.length === 0) {
+      throw new HttpError(
+        400,
+        "Request must include a non-empty 'messages' array.",
+        "invalid_request_error",
+        "missing_messages"
+      );
+    }
+
+    monitor.describePayload(record, {
+      stream: isStreaming,
+      modelRequested: payload.model,
+      messages,
+      toolNames: tools.map((t) => t.function?.name || "(unnamed)"),
+      toolChoice: payload.tool_choice ? JSON.stringify(payload.tool_choice) : undefined,
+      promptChars: messages.reduce((sum, m) => {
+        try {
+          return sum + extractTextContent(m.content).length;
+        } catch {
+          return sum;
+        }
+      }, 0),
+    });
+
+    if (isStreaming) {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        ...corsHeaders,
+      });
+      writeAndCount(
+        res,
+        record,
+        `data: ${JSON.stringify({
+          id: streamId,
+          object: "chat.completion.chunk",
+          created,
+          model: modelName,
+          choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }],
+        })}\n\n`
+      );
+    }
+
+    for await (const part of handler.streamChat(
+      messages,
+      tools,
+      payload.tool_choice,
+      payload.model,
+      cfg,
+      record,
+      cancellation.token
+    )) {
+      if (part.kind === "text" && part.text) {
+        text += part.text;
+        monitor.appendText(record, part.text);
+        if (isStreaming) {
+          writeAndCount(
+            res,
+            record,
+            `data: ${JSON.stringify({
+              id: streamId,
+              object: "chat.completion.chunk",
+              created,
+              model: modelName,
+              choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }],
+            })}\n\n`
+          );
+        }
+      } else if (part.kind === "tool-call") {
+        const call = {
+          id: part.callId || `call_${toolCalls.length}`,
+          name: part.name || "unknown",
+          input: part.input ?? {},
+        };
+        toolCalls.push(call);
+        const args = JSON.stringify(call.input);
+        monitor.addToolCall(record, { id: call.id, name: call.name, args });
+        if (isStreaming) {
+          writeAndCount(
+            res,
+            record,
+            `data: ${JSON.stringify({
+              id: streamId,
+              object: "chat.completion.chunk",
+              created,
+              model: modelName,
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: toolCalls.length - 1,
+                        id: call.id,
+                        type: "function",
+                        function: { name: call.name, arguments: args },
+                      },
+                    ],
+                  },
+                  finish_reason: null,
+                },
+              ],
+            })}\n\n`
+          );
+        }
+      }
+    }
+
+    const finishReason = toolCalls.length > 0 ? "tool_calls" : "stop";
+    if (!text.trim() && toolCalls.length === 0) {
+      monitor.warn(
+        record,
+        "The model returned an empty response (no text, no tool calls). Agent clients treat this as the end of the turn."
+      );
+    }
+    if (tools.length > 0 && toolCalls.length === 0) {
+      monitor.event(record, "note", `client offered ${tools.length} tool(s); model answered with text only`);
+    }
+
+    const promptTokens = estimateTokens(
+      messages
+        .map((m) => {
+          try {
+            return extractTextContent(m.content);
+          } catch {
+            return "";
+          }
+        })
+        .join("\n")
+    );
+    const completionTokens = estimateTokens(text);
+    const usage = {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: promptTokens + completionTokens,
+    };
+
+    if (isStreaming) {
+      writeAndCount(
+        res,
+        record,
+        `data: ${JSON.stringify({
+          id: streamId,
+          object: "chat.completion.chunk",
+          created,
+          model: modelName,
+          choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
+          usage,
+        })}\n\n`
+      );
+      writeAndCount(res, record, "data: [DONE]\n\n");
+      res.end();
+    } else {
+      const message: Record<string, unknown> = { role: "assistant", content: text.length > 0 ? text : null };
+      if (toolCalls.length > 0) {
+        message.tool_calls = toolCalls.map((call) => ({
+          id: call.id,
+          type: "function",
+          function: { name: call.name, arguments: JSON.stringify(call.input) },
+        }));
+      }
+      endJson(
+        res,
+        record,
+        200,
+        {
+          id: streamId,
+          object: "chat.completion",
+          created,
+          model: modelName,
+          choices: [{ index: 0, message, finish_reason: finishReason }],
+          usage,
+        },
+        corsHeaders
+      );
+    }
+    monitor.finish(record, 200, finishReason);
+  } catch (err) {
+    const { status, body } = errorPayload(err);
+    if (res.writableEnded) {
+      monitor.fail(record, err, status);
+    } else if (res.headersSent) {
+      // Mid-stream failure: the status is already sent, so report through the SSE channel.
+      writeAndCount(res, record, `data: ${JSON.stringify(body)}\n\n`);
+      writeAndCount(res, record, "data: [DONE]\n\n");
+      res.end();
+      monitor.fail(record, err, status);
+    } else {
+      endJson(res, record, status, body, corsHeaders);
+      monitor.fail(record, err, status);
+    }
+  } finally {
+    cancellation.dispose();
+  }
 }
 
 export async function startVsllmServer(
   context: vscode.ExtensionContext,
-  opts: { url?: string; port?: number } = {}
+  opts: { url?: string; port?: number; host?: string } = {}
 ) {
-  const port = opts.port ?? 8080;
-  const url = opts.url ?? "http://localhost";
+  const rootConfig = vscode.workspace.getConfiguration("vsllmServer");
+  const port = opts.port ?? rootConfig.get<number>("port", DEFAULT_PORT);
+  const host = (opts.host ?? rootConfig.get<string>("host", DEFAULT_HOST)).trim() || DEFAULT_HOST;
+  const url = opts.url ?? rootConfig.get<string>("url", "http://localhost");
 
   const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const { path, query } = normalizePath(req.url);
@@ -320,27 +755,35 @@ export async function startVsllmServer(
       headers: collectHeaders(req),
     });
 
-    const corsHeaders = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    };
+    const cfg = readRequestConfig();
+    const corsHeaders = corsHeadersFor(req, cfg);
 
     if (req.method === "OPTIONS") {
-      res.writeHead(200, corsHeaders);
+      res.writeHead(204, corsHeaders);
       res.end();
-      monitor.finish(record, 200);
+      monitor.finish(record, 204);
+      return;
+    }
+
+    try {
+      assertAuthorized(req, cfg);
+    } catch (err) {
+      const { status, body } = errorPayload(err);
+      monitor.warn(record, "Rejected an unauthenticated request (vsllmServer.apiKey is set).");
+      endJson(res, record, status, body, corsHeaders);
+      monitor.finish(record, status);
       return;
     }
 
     if (req.method === "GET" && (path === "/v1/models" || path === "/models")) {
       try {
-        const data = await listModels();
+        const data = await listModelsPayload(cfg);
         endJson(res, record, 200, { object: "list", data }, corsHeaders);
         monitor.finish(record, 200);
       } catch (err) {
-        endJson(res, record, 500, { error: err instanceof Error ? err.message : String(err) }, corsHeaders);
-        monitor.fail(record, err, 500);
+        const { status, body } = errorPayload(err);
+        endJson(res, record, status, body, corsHeaders);
+        monitor.fail(record, err, status);
       }
       return;
     }
@@ -358,222 +801,7 @@ export async function startVsllmServer(
     }
 
     if (req.method === "POST" && (path === "/v1/chat/completions" || path === "/chat/completions")) {
-      const chunks: Buffer[] = [];
-      req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-      req.on("aborted", () => {
-        monitor.event(record, "aborted", "client closed the connection before the response finished");
-      });
-      req.on("end", async () => {
-        const body = Buffer.concat(chunks).toString("utf8");
-        monitor.setRequestBody(record, body);
-
-        let payload: any;
-        try {
-          payload = JSON.parse(body);
-        } catch (err) {
-          endJson(
-            res,
-            record,
-            400,
-            {
-              error: {
-                message: "Invalid JSON body: " + (err instanceof Error ? err.message : String(err)),
-                type: "invalid_request_error",
-              },
-            },
-            corsHeaders
-          );
-          monitor.fail(record, err, 400);
-          return;
-        }
-
-        const messages: OpenAIMessage[] = Array.isArray(payload.messages) ? payload.messages : [];
-        const tools: OpenAITool[] = Array.isArray(payload.tools) ? payload.tools : [];
-        const isStreaming = payload.stream === true;
-        const config = vscode.workspace.getConfiguration("vsllmServer");
-        const selectedModelId = config.get<string>("model", "");
-        const modelName = payload.model || selectedModelId || "vsllm-copilot";
-
-        monitor.describePayload(record, {
-          stream: isStreaming,
-          modelRequested: payload.model,
-          messages,
-          toolNames: tools.map((t) => t.function?.name || "(unnamed)"),
-          toolChoice: payload.tool_choice ? JSON.stringify(payload.tool_choice) : undefined,
-          promptChars: messages.reduce((sum, m) => sum + extractTextContent(m.content).length, 0),
-        });
-
-        const cancellation = new vscode.CancellationTokenSource();
-        res.on("close", () => {
-          if (record.state === "active") {
-            cancellation.cancel();
-          }
-        });
-
-        const streamId = `chatcmpl-${Date.now()}`;
-        const created = Math.floor(Date.now() / 1000);
-        let text = "";
-        const toolCalls: Array<{ id: string; name: string; input: object }> = [];
-
-        try {
-          if (isStreaming) {
-            res.writeHead(200, {
-              "Content-Type": "text/event-stream",
-              "Cache-Control": "no-cache",
-              Connection: "keep-alive",
-              ...corsHeaders,
-            });
-            writeAndCount(
-              res,
-              record,
-              `data: ${JSON.stringify({
-                id: streamId,
-                object: "chat.completion.chunk",
-                created,
-                model: modelName,
-                choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }],
-              })}\n\n`
-            );
-          }
-
-          for await (const part of handler.streamChat(
-            messages,
-            tools,
-            payload.tool_choice,
-            record,
-            cancellation.token
-          )) {
-            if (part.kind === "text" && part.text) {
-              text += part.text;
-              monitor.appendText(record, part.text);
-              if (isStreaming) {
-                writeAndCount(
-                  res,
-                  record,
-                  `data: ${JSON.stringify({
-                    id: streamId,
-                    object: "chat.completion.chunk",
-                    created,
-                    model: modelName,
-                    choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }],
-                  })}\n\n`
-                );
-              }
-            } else if (part.kind === "tool-call") {
-              const call = {
-                id: part.callId || `call_${toolCalls.length}`,
-                name: part.name || "unknown",
-                input: part.input ?? {},
-              };
-              toolCalls.push(call);
-              const args = JSON.stringify(call.input);
-              monitor.addToolCall(record, { id: call.id, name: call.name, args });
-              if (isStreaming) {
-                writeAndCount(
-                  res,
-                  record,
-                  `data: ${JSON.stringify({
-                    id: streamId,
-                    object: "chat.completion.chunk",
-                    created,
-                    model: modelName,
-                    choices: [
-                      {
-                        index: 0,
-                        delta: {
-                          tool_calls: [
-                            {
-                              index: toolCalls.length - 1,
-                              id: call.id,
-                              type: "function",
-                              function: { name: call.name, arguments: args },
-                            },
-                          ],
-                        },
-                        finish_reason: null,
-                      },
-                    ],
-                  })}\n\n`
-                );
-              }
-            }
-          }
-
-          const finishReason = toolCalls.length > 0 ? "tool_calls" : "stop";
-          if (!text.trim() && toolCalls.length === 0) {
-            monitor.warn(
-              record,
-              "The model returned an empty response (no text, no tool calls). Agent clients treat this as the end of the turn."
-            );
-          }
-          if (tools.length > 0 && toolCalls.length === 0) {
-            monitor.event(record, "note", `client offered ${tools.length} tool(s); model answered with text only`);
-          }
-
-          const promptTokens = estimateTokens(messages.map((m) => extractTextContent(m.content)).join("\n"));
-          const completionTokens = estimateTokens(text);
-          const usage = {
-            prompt_tokens: promptTokens,
-            completion_tokens: completionTokens,
-            total_tokens: promptTokens + completionTokens,
-          };
-
-          if (isStreaming) {
-            writeAndCount(
-              res,
-              record,
-              `data: ${JSON.stringify({
-                id: streamId,
-                object: "chat.completion.chunk",
-                created,
-                model: modelName,
-                choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
-                usage,
-              })}\n\n`
-            );
-            writeAndCount(res, record, "data: [DONE]\n\n");
-            res.end();
-          } else {
-            const message: Record<string, unknown> = { role: "assistant", content: text.length > 0 ? text : null };
-            if (toolCalls.length > 0) {
-              message.tool_calls = toolCalls.map((call) => ({
-                id: call.id,
-                type: "function",
-                function: { name: call.name, arguments: JSON.stringify(call.input) },
-              }));
-            }
-            endJson(
-              res,
-              record,
-              200,
-              {
-                id: streamId,
-                object: "chat.completion",
-                created,
-                model: modelName,
-                choices: [{ index: 0, message, finish_reason: finishReason }],
-                usage,
-              },
-              corsHeaders
-            );
-          }
-          monitor.finish(record, 200, finishReason);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          if (isStreaming && res.headersSent) {
-            writeAndCount(res, record, `data: ${JSON.stringify({ error: { message, type: "server_error" } })}\n\n`);
-            writeAndCount(res, record, "data: [DONE]\n\n");
-            res.end();
-          } else if (!res.headersSent) {
-            endJson(res, record, 500, { error: { message, type: "server_error" } }, corsHeaders);
-          } else {
-            res.end();
-          }
-          monitor.fail(record, err, 500);
-        } finally {
-          cancellation.dispose();
-        }
-      });
+      await handleChatCompletions(req, res, record, cfg, corsHeaders);
       return;
     }
 
@@ -581,28 +809,54 @@ export async function startVsllmServer(
       record,
       `Unknown route ${req.method} ${path}. Expected /v1/chat/completions or /v1/models \u2014 check the base URL configured in your client.`
     );
-    endJson(res, record, 404, { error: "Not found" }, corsHeaders);
+    endJson(res, record, 404, { error: { message: "Not found", type: "invalid_request_error" } }, corsHeaders);
     monitor.finish(record, 404);
   });
 
-  server.on("error", (err) => {
-    monitor.setServerState({ running: false, url, port });
-    vscode.window.showErrorMessage(`VSLLM Server failed on port ${port}: ${err.message}`);
-  });
+  return new Promise<http.Server>((resolve, reject) => {
+    const onStartupError = (err: NodeJS.ErrnoException) => {
+      server.off("listening", onListening);
+      const detail =
+        err.code === "EADDRINUSE"
+          ? `Port ${port} on ${host} is already in use.`
+          : err.code === "EACCES"
+            ? `Permission denied binding ${host}:${port}.`
+            : err.message;
+      const message = `VSLLM Server failed to start: ${detail}`;
+      monitor.setServerState({ running: false, url, port });
+      vscode.window.showErrorMessage(message);
+      reject(new Error(message));
+    };
 
-  server.listen(port, () => {
-    monitor.setServerState({ running: true, url, port, startedAt: Date.now() });
-    vscode.window.showInformationMessage(`VSLLM Server running on ${url}:${port}/v1/chat/completions`);
-  });
+    const onListening = () => {
+      server.off("error", onStartupError);
+      // Runtime errors after startup must not crash the extension host.
+      server.on("error", (err) => {
+        vscode.window.showErrorMessage(`VSLLM Server error: ${err.message}`);
+      });
 
-  context.subscriptions.push({
-    dispose: () => {
-      server.close();
-      monitor.setServerState({ running: false });
-    },
-  });
+      context.subscriptions.push({
+        dispose: () => {
+          server.close();
+          monitor.setServerState({ running: false });
+        },
+      });
 
-  return server;
+      monitor.setServerState({ running: true, url, port, startedAt: Date.now() });
+      vscode.window.showInformationMessage(`VSLLM Server running on ${url}:${port}/v1/chat/completions`);
+      if (!LOOPBACK_HOSTS.has(host)) {
+        vscode.window.showWarningMessage(
+          `VSLLM Server is bound to ${host}, so it is reachable from other machines on your network. ` +
+            `Set an API key in vsllmServer.apiKey, or set vsllmServer.host back to 127.0.0.1.`
+        );
+      }
+      resolve(server);
+    };
+
+    server.once("error", onStartupError);
+    server.once("listening", onListening);
+    server.listen(port, host);
+  });
 }
 
 export async function stopVsllmServer(server: http.Server) {
