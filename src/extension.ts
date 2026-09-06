@@ -10,16 +10,95 @@ const fetch = require('node-fetch');
 
 // ...existing code...
 
+const MODELS_CACHE_KEY = "vsllmServer.models";
 
-function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.ExtensionContext): string {
+type ModelInfo = { id: string; vendor: string; family: string };
+
+type ModelFetchResult = { models: ModelInfo[]; error?: string };
+
+function escapeHtml(value: string): string {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Embedding JSON in an inline <script> requires neutralising "</script>" sequences.
+function toInlineJson(value: unknown): string {
+  return JSON.stringify(value ?? null).replace(/</g, "\\u003c");
+}
+
+/**
+ * Caches the VS Code chat models so the sidebar can render instantly from the last known
+ * list while a fresh lookup runs in the background. Concurrent refreshes share one lookup.
+ */
+class ModelCatalog {
+  private inFlight: Promise<ModelFetchResult> | undefined;
+
+  constructor(private readonly context: vscode.ExtensionContext) {}
+
+  getCached(): ModelInfo[] {
+    return this.context.globalState.get<ModelInfo[]>(MODELS_CACHE_KEY, []) ?? [];
+  }
+
+  refresh(): Promise<ModelFetchResult> {
+    if (this.inFlight) {
+      return this.inFlight;
+    }
+    const pending = this.fetchModels().then(
+      async (result) => {
+        // A failed lookup (e.g. Copilot still starting up) must not wipe a usable cache.
+        if (result.models.length > 0 || !result.error) {
+          await this.context.globalState.update(MODELS_CACHE_KEY, result.models);
+        }
+        return result;
+      },
+      (err) => ({ models: [] as ModelInfo[], error: err instanceof Error ? err.message : String(err) })
+    );
+    this.inFlight = pending.finally(() => {
+      this.inFlight = undefined;
+    });
+    return this.inFlight;
+  }
+
+  private async fetchModels(): Promise<ModelFetchResult> {
+    try {
+      if (!('lm' in vscode) || !vscode.lm?.selectChatModels) {
+        return {
+          models: [],
+          error: 'VS Code LM API not available in this environment. Please ensure you have the Copilot extension installed and enabled.',
+        };
+      }
+      const rawModels = await vscode.lm.selectChatModels({ vendor: "copilot" });
+      if (!rawModels || rawModels.length === 0) {
+        return { models: [], error: 'No Copilot models found. Please check your Copilot setup and user consent.' };
+      }
+      return { models: rawModels.map((m) => ({ id: m.id, vendor: m.vendor, family: m.family })) };
+    } catch (err) {
+      return { models: [], error: err instanceof Error && err.message ? err.message : 'Failed to fetch models.' };
+    }
+  }
+}
+
+function getConfigWebviewHtml(catalog: ModelCatalog): string {
   // Get current config values from VS Code settings
   const config = vscode.workspace.getConfiguration('vsllmServer');
   let url = config.get<string>('url', 'http://localhost');
   let port = config.get<number>('port', 8801);
   let model = config.get<string>('model', '');
   let apiKey = config.get<string>('apiKey', '');
-  // Always show 'listing...' initially, will be replaced asynchronously
-  let modelOptions = "<option value=''>Loading models...</option>";
+  // Render the last known models straight into the markup so the form is usable on first paint.
+  const cachedModels = catalog.getCached();
+  const modelOptions = cachedModels.length > 0
+    ? cachedModels
+        .map((m) => {
+          const label = `${m.vendor} ${m.family} ( ${m.id} )`;
+          return `<option value="${escapeHtml(m.id)}"${m.id === model ? " selected" : ""}>${escapeHtml(label)}</option>`;
+        })
+        .join("")
+    : `<option value="${escapeHtml(model)}">${model ? escapeHtml(model) : "⏳ Loading models…"}</option>`;
   // Basic HTML/JS/CSS for the config form
   return `
     <!DOCTYPE html>
@@ -87,6 +166,7 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
           .switch input:disabled + .track { opacity: .5; }
           .switch input:disabled { cursor: progress; }
           #testServerBtn { width: 100%; }
+          #modelStatus { font-size: 0.72em; opacity: .75; min-height: 1.2em; margin-bottom: 8px; }
           #serverResponse { width: 100%; height: 100px; margin-top: 16px; resize: vertical; border-radius: 10px; border: 1px solid #eee; }
       </style>
     </head>
@@ -94,18 +174,19 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
       <h2>VSLLM Server Configuration</h2>
   <form id="configForm">
         <label>Model Selection</label>
-        <select id="model" style="margin-bottom:8px;">
+        <select id="model" style="margin-bottom:4px;">
           ${modelOptions}
         </select>
+        <div id="modelStatus"></div>
         <button id="refreshModelsBtn" type="button" style="width:100%;margin-bottom:16px;">Refresh Models</button>
         <label>Server URL
-          <input type="text" id="url" value="${url}" />
+          <input type="text" id="url" value="${escapeHtml(url)}" />
         </label>
         <label>Server Port
-          <input type="number" id="port" value="${port}" />
+          <input type="number" id="port" value="${escapeHtml(String(port))}" />
         </label>
         <label>API Key
-          <input type="password" id="apiKey" value="${apiKey}" />
+          <input type="password" id="apiKey" value="${escapeHtml(apiKey)}" />
         </label>
         <button type="submit">Save Configuration</button>
       </form>
@@ -130,14 +211,29 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
       <textarea id="serverResponse" readonly placeholder="Server response will appear here..."></textarea>
       <script>
         const vscode = acquireVsCodeApi();
-        // Request model list after page loads
-        let lastValidModels = [];
-        window.addEventListener('DOMContentLoaded', function() {
-          document.getElementById('serverResponse').value = '🔄 Loading available models... Please wait.';
-          vscode.postMessage({ command: 'getModelList' });
-        });
+        const savedModel = ${toInlineJson(model)};
+        let lastValidModels = ${toInlineJson(cachedModels)};
+
+        function setModelStatus(text) {
+          document.getElementById('modelStatus').textContent = text || '';
+        }
+        function renderModels(models) {
+          const modelSelect = document.getElementById('model');
+          const desired = modelSelect.value || savedModel;
+          while (modelSelect.firstChild) modelSelect.removeChild(modelSelect.firstChild);
+          models.forEach(function(m) {
+            const opt = document.createElement('option');
+            opt.value = m.id;
+            opt.textContent = [m.vendor, m.family, '(', m.id, ')'].join(' ');
+            if (desired === m.id) opt.selected = true;
+            modelSelect.appendChild(opt);
+          });
+        }
+
+        // The form is already interactive; this only asks for a fresher list.
+        setModelStatus(lastValidModels.length > 0 ? '⏳ Refreshing model list…' : '⏳ Loading models…');
         document.getElementById('refreshModelsBtn').addEventListener('click', function() {
-          document.getElementById('serverResponse').value = '🔄 Refreshing model list...';
+          setModelStatus('⏳ Refreshing model list…');
           vscode.postMessage({ command: 'getModelList' });
         });
         document.getElementById('configForm').addEventListener('submit', function(e) {
@@ -157,7 +253,7 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
           vscode.postMessage({ command: 'setServer', running: wantRunning });
           if (wantRunning) {
             // A fresh start is the moment the model list is most likely to have changed.
-            document.getElementById('serverResponse').value = '🔄 Refreshing model list after server start...';
+            setModelStatus('⏳ Refreshing model list…');
             vscode.postMessage({ command: 'getModelList' });
           }
         });
@@ -193,41 +289,50 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
               'In: ' + s.bytesIn + ' B · Out: ' + s.bytesOut + ' B · tool calls: ' + s.toolCallsEmitted;
           }
           if (message.command === 'updateModelList') {
-            const modelSelect = document.getElementById('model');
-            const currentValue = modelSelect.value;
-            // Always clear dropdown first
-            while (modelSelect.firstChild) modelSelect.removeChild(modelSelect.firstChild);
+            if (message.loading) {
+              // A lookup is still running: keep whatever is already selectable.
+              if (message.models && message.models.length > 0) {
+                lastValidModels = message.models;
+                renderModels(message.models);
+              }
+              setModelStatus(lastValidModels.length > 0 ? '⏳ Refreshing model list…' : '⏳ Loading models…');
+              return;
+            }
             if (message.error) {
-              // Log error to console for debugging
               console.error('VSLLM Sidebar: Model list error:', message.error);
-              // Show error in dropdown
+              if (lastValidModels.length > 0) {
+                // Keep the cached list usable and just report that the refresh failed.
+                setModelStatus('⚠️ Could not refresh models: ' + message.error);
+                return;
+              }
+              const modelSelect = document.getElementById('model');
+              while (modelSelect.firstChild) modelSelect.removeChild(modelSelect.firstChild);
               const opt = document.createElement('option');
               opt.value = '';
-              opt.textContent = '❌ ' + (message.error || 'Error loading models');
+              opt.textContent = '❌ Error loading models';
               modelSelect.appendChild(opt);
-              document.getElementById('serverResponse').value = '❌ Error loading models: ' + message.error;
+              setModelStatus('❌ ' + message.error);
               return;
             }
             if (message.models && message.models.length > 0) {
               lastValidModels = message.models;
-              message.models.forEach(function(m) {
-                var opt = document.createElement('option');
-                opt.value = m.id;
-                opt.textContent = [m.vendor, m.family, '(', m.id, ')'].join(' ');
-                if (currentValue === m.id) opt.selected = true;
-                modelSelect.appendChild(opt);
-              });
-              document.getElementById('serverResponse').value = '✅ Model list loaded. Please select a model.';
+              renderModels(message.models);
+              setModelStatus('✅ ' + message.models.length + ' model(s) available.');
             } else {
               lastValidModels = [];
+              const modelSelect = document.getElementById('model');
+              while (modelSelect.firstChild) modelSelect.removeChild(modelSelect.firstChild);
               const opt = document.createElement('option');
               opt.value = '';
               opt.textContent = 'No models available';
               modelSelect.appendChild(opt);
-              document.getElementById('serverResponse').value = '⚠️ No models found. Please check your VS Code LLM setup.';
+              setModelStatus('⚠️ No models found. Please check your VS Code LLM setup.');
             }
           }
         });
+        // Tell the extension the script is live. Messages posted before this point can be
+        // dropped by VS Code, so the initial model list must be requested from here.
+        vscode.postMessage({ command: 'ready' });
       </script>
     </body>
     </html>
@@ -240,7 +345,8 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
   private subscribed = false;
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly isServerRunning: () => boolean
+    private readonly isServerRunning: () => boolean,
+    private readonly catalog: ModelCatalog
   ) {}
 
   /** Pushes the authoritative server/monitor state so both switches always mirror reality. */
@@ -258,19 +364,16 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  async resolveWebviewView(webviewView: vscode.WebviewView) {
+  resolveWebviewView(webviewView: vscode.WebviewView) {
     this.webviewView = webviewView;
     webviewView.webview.options = { enableScripts: true };
-    webviewView.webview.html = getConfigWebviewHtml(webviewView.webview, this.context);
-    // After initial render, request model list
-    setTimeout(() => {
-      if (this.webviewView) {
-        console.log("VSLLM Sidebar: Posting initial model list from globalState", this.context.globalState.get<any[]>("vsllmServer.models", []));
-        this.webviewView.webview.postMessage({ command: 'updateModelList', models: this.context.globalState.get<any[]>("vsllmServer.models", []) });
-      }
-    }, 100);
+    // Paint synchronously from the cached model list so the panel is usable immediately,
+    // then reconcile with a fresh lookup in the background.
+    webviewView.webview.html = getConfigWebviewHtml(this.catalog);
+    // The model list and toggle state are pushed once the webview reports 'ready':
+    // posting them here would race the webview's script and be silently dropped.
     this.postToggleState();
-    // The webview is torn down while hidden, so re-sync the switches whenever it comes back.
+    // Re-sync the switches whenever the view comes back, so they always mirror reality.
     webviewView.onDidChangeVisibility(() => {
       if (webviewView.visible) {
         this.postToggleState();
@@ -295,7 +398,11 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
     }
     webviewView.webview.onDidReceiveMessage(async (message) => {
       console.log("VSLLM Sidebar: Received message from webview", message);
-      if (message.command === 'saveConfig') {
+      if (message.command === 'ready') {
+        // The webview is now listening, so it is safe to push state into it.
+        this.postToggleState();
+        await this.sendModelList();
+      } else if (message.command === 'saveConfig') {
         const config = vscode.workspace.getConfiguration('vsllmServer');
         await config.update('model', message.model, vscode.ConfigurationTarget.Workspace);
         await config.update('url', message.url, vscode.ConfigurationTarget.Workspace);
@@ -362,69 +469,37 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
           }
         }
       } else if (message.command === 'getModelList') {
-        console.log("VSLLM Sidebar: getModelList called");
-        // Fetch ALL available models from VS Code LM API and pass them to the webview
-        let models: any[] = [];
-        let errorMsg = '';
-        try {
-          console.log("VSLLM Sidebar: Checking vscode.lm API", 'lm' in vscode, vscode.lm?.selectChatModels);
-          if (!('lm' in vscode) || !vscode.lm?.selectChatModels) {
-            errorMsg = '❌ VS Code LM API not available in this environment. Please ensure you have the Copilot extension installed and enabled.';
-            console.error("VSLLM Sidebar: LM API not available");
-          } else {
-            const selector = { vendor: "copilot" };
-            console.log("VSLLM Sidebar: Calling selectChatModels with selector", selector);
-            const rawModels = await vscode.lm.selectChatModels(selector);
-            if (rawModels && rawModels.length > 0) {
-              console.log("VSLLM Sidebar: selectChatModels returned:");
-              rawModels.forEach(m => console.log("  ", m.id));
-            } else {
-              console.log("VSLLM Sidebar: selectChatModels returned no models.");
-            }
-            if (rawModels && rawModels.length > 0) {
-              // Map to a simple serializable structure for webview/globalState
-              models = rawModels.map(m => ({ id: m.id, vendor: m.vendor, family: m.family }));
-            } else {
-              errorMsg = '⚠️ No Copilot models found. Please check your Copilot setup and user consent.';
-              models = [];
-            }
-          }
-        } catch (err) {
-          errorMsg = (err instanceof Error && err.message) ? err.message : 'Failed to fetch models.';
-          console.error("VSLLM Sidebar: Error fetching models", err);
-          models = [];
-        }
-        console.log("VSLLM Sidebar: Updating globalState with models", models);
-        await this.context.globalState.update("vsllmServer.models", models);
-        if (this.webviewView) {
-          console.log("VSLLM Sidebar: Posting updateModelList to webview:");
-          if (models && models.length > 0) {
-            models.forEach(m => console.log("  ", JSON.stringify(m)));
-          } else {
-            console.log("  No models available.");
-          }
-          if (errorMsg) {
-            console.log("  Error:", errorMsg);
-          }
-          if (models && models.length > 0) {
-            this.webviewView.webview.postMessage({ command: 'updateModelList', models });
-          } else {
-            this.webviewView.webview.postMessage({ command: 'updateModelList', models: [], error: errorMsg || 'No models available.' });
-            this.webviewView.webview.postMessage({ command: 'showServerResponse', text: errorMsg });
-          }
-        }
+        await this.sendModelList();
       }
     });
   }
+
+  /**
+   * Immediately echoes the cached list with a "still loading" marker, then posts the
+   * authoritative list once the (shared) lookup settles. The GUI stays interactive throughout.
+   */
+  private async sendModelList() {
+    const post = (payload: Record<string, unknown>) => {
+      this.webviewView?.webview.postMessage({ command: 'updateModelList', ...payload });
+    };
+    post({ models: this.catalog.getCached(), loading: true });
+    const { models, error } = await this.catalog.refresh();
+    if (error) {
+      console.error("VSLLM Sidebar: Model list error:", error);
+    }
+    post(error ? { models, error } : { models });
+  }
+
   refreshWebview() {
     if (this.webviewView) {
-      this.webviewView.webview.html = getConfigWebviewHtml(this.webviewView.webview, this.context);
+      this.webviewView.webview.html = getConfigWebviewHtml(this.catalog);
     }
   }
 }
 export function activate(context: vscode.ExtensionContext) {
   let serverInstance: any = null;
   let sidebarProviderInstance: VsllmServerSidebarProvider | undefined;
+  const modelCatalog = new ModelCatalog(context);
 
   // Start server command
   context.subscriptions.push(
@@ -576,15 +651,20 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Register the sidebar view provider
   try {
-    sidebarProviderInstance = new VsllmServerSidebarProvider(context, () => serverInstance !== null);
+    sidebarProviderInstance = new VsllmServerSidebarProvider(context, () => serverInstance !== null, modelCatalog);
     context.subscriptions.push(
       vscode.window.registerWebviewViewProvider(
         VsllmServerSidebarProvider.viewType,
-        sidebarProviderInstance
+        sidebarProviderInstance,
+        // Keep the webview alive while hidden so re-opening the sidebar is instant
+        // instead of rebuilding it and re-running the model lookup.
+        { webviewOptions: { retainContextWhenHidden: true } }
       )
     );
   } catch (err) {
     console.error("VSLLM Server: WebviewViewProvider registration error:", err);
   }
+  // Warm the model cache in the background so the first sidebar open already has a list.
+  void modelCatalog.refresh();
   console.log("VSLLM Server: Extension activate end");
 }

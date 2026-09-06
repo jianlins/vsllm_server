@@ -47,12 +47,13 @@ vsllm_server/
 
 The extension entry point. Responsibilities:
 
-- **`activate()`** registers the commands, the sidebar webview provider, and the status bar item.
+- **`activate()`** registers the commands, the sidebar webview provider, and the status bar item, and warms the model cache in the background.
 - **`VsllmServerSidebarProvider`** renders the Server Status panel and handles webview messages: `saveConfig`, `setServer`, `setMonitor`, `testServer`, `getModelList`. It pushes an `updateToggles` message (server running/address, monitor open) whenever the server or monitor state changes, so the two on/off switches always mirror the real state.
-- **`getConfigWebviewHtml()`** builds the panel HTML as a template string, interpolating current settings.
+- **`ModelCatalog`** owns model discovery: it reads/writes the `vsllmServer.models` cache, collapses concurrent refreshes into a single `selectChatModels()` call, and keeps the previous cache when a lookup fails so a transient Copilot hiccup cannot blank the dropdown.
+- **`getConfigWebviewHtml()`** builds the panel HTML as a template string, interpolating current settings (HTML-escaped) and the cached model list.
 - A **status bar item** shows live request/error counts from the monitor and opens the Traffic Monitor when clicked.
 
-Discovered models are cached in `context.globalState` under `vsllmServer.models` so the panel can render immediately on reopen, then refresh asynchronously.
+Model loading never blocks the GUI. The panel HTML is written synchronously with the cached models already inlined as `<option>` elements, so the form and both switches are interactive on first paint; a `#modelStatus` line shows `⏳ Loading models…` / `⏳ Refreshing model list…` while a fresh `selectChatModels()` lookup runs, and the dropdown is repopulated via an `updateModelList` message when it settles. Messages carrying `loading: true` only refresh the indicator, so an empty cache never flashes a misleading "No models available". The view is registered with `retainContextWhenHidden: true`, so re-opening the sidebar reveals the existing webview instead of rebuilding it and re-running the lookup.
 
 Registered commands — all declared in `contributes.commands`, so they are reachable from the Command Palette under the **VSLLM Server** category:
 
