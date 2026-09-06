@@ -159,28 +159,31 @@ def test_streaming():
     assert finish_reason == "stop"
 
 
-def test_unknown_model_is_rejected():
-    """An explicitly requested unknown model fails instead of silently substituting."""
+def test_unknown_model_is_ignored():
+    """An unknown requested model no longer fails; the server just ignores it."""
     payload = {
         "model": "definitely-not-a-real-model",
         "messages": [{"role": "user", "content": "Hi"}],
     }
     response = requests.post(
-        f"{BASE_URL}/v1/chat/completions", json=payload, headers=HEADERS, timeout=30
-    )
-    assert response.status_code == 404, response.text
-    assert response.json()["error"]["code"] == "model_not_found"
-
-
-def test_known_model_is_honoured():
-    """A requested model that exists is the one that answers."""
-    model_id = _first_model_id()
-    payload = {"model": model_id, "messages": [{"role": "user", "content": "Say ok."}]}
-    response = requests.post(
         f"{BASE_URL}/v1/chat/completions", json=payload, headers=HEADERS, timeout=120
     )
     assert response.status_code == 200, response.text
-    assert response.json()["model"] == model_id
+    assert response.json()["model"] != "definitely-not-a-real-model"
+
+
+def test_requested_model_is_ignored():
+    """The client's `model` field never picks the model; the extension's configured model always answers."""
+    real_model_id = _first_model_id()
+    reported_models = set()
+    for requested in ("definitely-not-a-real-model", real_model_id):
+        payload = {"model": requested, "messages": [{"role": "user", "content": "Say ok."}]}
+        response = requests.post(
+            f"{BASE_URL}/v1/chat/completions", json=payload, headers=HEADERS, timeout=120
+        )
+        assert response.status_code == 200, response.text
+        reported_models.add(response.json()["model"])
+    assert len(reported_models) == 1, "server must report the same model regardless of the request's model field"
 
 
 def test_invalid_json_is_400():
@@ -242,8 +245,8 @@ def _run_manually():
         test_content_parts_array,
         test_unsupported_content_part_is_rejected,
         test_streaming,
-        test_unknown_model_is_rejected,
-        test_known_model_is_honoured,
+        test_unknown_model_is_ignored,
+        test_requested_model_is_ignored,
         test_invalid_json_is_400,
         test_missing_messages_is_400,
         test_oversized_body_is_rejected,

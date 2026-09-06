@@ -3,8 +3,16 @@
 Expose VSCode chat models as an OpenAI-compatible API endpoint. This extension provides a local HTTP server with a `/v1/chat/completions` endpoint, powered by VS Code's Language Model API.
 
 
-## New in 0.0.5
+## New in 0.0.6
 - **Server status light**: the sidebar **Server** switch is now a traffic light — amber while the server starts, then it automatically sends a real `hi` chat completion through the API and only turns green once the model actually answers, red (with the reason) when it does not. The separate *Test Server* button and its response box are gone.
+- **Instant sidebar rendering with background model loading**: the sidebar now displays immediately on startup and fetches available models in the background, making the extension responsive from the start.
+- **On/off switches instead of buttons**: the server and traffic monitor controls are now clean toggle switches for better UX.
+- **Server-controlled model selection**: the `model` field sent by the client is ignored entirely; the extension always uses the model configured in `vsllmServer.model` (or the sidebar selection). Clients can never switch the active model by requesting a different name, even one that VS Code actually offers.
+- **Removed redundant `enableLogging` setting**: simplified configuration by removing the verbose logging toggle (use VS Code's output channel instead).
+- **Developer documentation**: new [DEVELOPER.md](./DEVELOPER.md) guide describing project structure, architecture, and internals for contributors.
+- **Automated VSIX build and release workflow**: GitHub Actions workflow automates building and publishing releases to GitHub and the VS Code Marketplace.
+
+## New in 0.0.5
 - **Tool / function calling support**: OpenAI `tools` are forwarded to the VS Code Language Model API and `tool_calls` are returned to the client (both streaming and non-streaming), with `finish_reason: "tool_calls"`. This is what agent clients such as **opencode**, Cline, Aider or Continue need in order to actually run tools instead of stopping after the first sentence.
 - **Full tool round-trip**: assistant `tool_calls` and `role: "tool"` results sent back by the client are converted into `LanguageModelToolCallPart` / `LanguageModelToolResultPart` instead of being flattened into text.
 - **Traffic Monitor GUI**: a new panel (`VSLLM Server: Open Traffic Monitor`) shows every request in and out — payloads, streamed chunks, tool calls, timings, bytes, warnings and errors.
@@ -67,7 +75,7 @@ This ensures the extension can properly compile TypeScript and run without getti
 ## Configuration
 All options are available in the VSLLM Server sidebar panel or in VS Code settings:
 
-- **Model Selection**: ⚠️ The settings dropdown for model selection is a placeholder and will show "pending...". To select a model, open the VSLLM Server sidebar panel first. The sidebar will show the latest available models and allow you to select one dynamically.
+- **Model Selection**: ⚠️ The settings dropdown for model selection is a placeholder and will show "pending...". To select a model, open the VSLLM Server sidebar panel first. The sidebar will show the latest available models and allow you to select one dynamically. Whatever is configured here (or `vsllmServer.model`) is always what serves requests — a `model` field in the client's request body is ignored.
 - **Server URL**: Set the base URL (default: `http://localhost`).
 - **Bind Address** (`vsllmServer.host`): interface to listen on (default: `127.0.0.1`, this machine only).
 - **Server Port**: Set the port number (default: `8801`).
@@ -127,7 +135,7 @@ This extension exposes VS Code's Copilot models as an OpenAI-compatible API. You
 
 ### opencode
 
-Add the server as an OpenAI-compatible provider in `opencode.json` (use the model id shown by `GET /v1/models`, e.g. `gpt-4o`):
+Add the server as an OpenAI-compatible provider in `opencode.json` (use the model id shown by `GET /v1/models`, e.g. `gpt-4o`, just to satisfy the client — the server always answers with whatever model is configured in `vsllmServer.model`, regardless of what's requested):
 
 ```json
 {

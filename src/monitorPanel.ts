@@ -370,7 +370,6 @@ export function getMonitorHtml(cspSource: string): string {
     sw.disabled = phase === "starting";
     sw.parentElement.className = "switch" + (busy ? " pending" : phase === "error" ? " failed" : "");
   }
-  }
 
   function statusBadge(rec) {
     if (rec.state === "active") { return el("span", "badge live", "live"); }

@@ -3,7 +3,7 @@
   "displayName": "VSCode LLM Server",
   "publisher": "jianlins",
   "description": "Expose VSCode chat models as an OpenAI-compatible API endpoint. Provides a local HTTP server with OpenAI-compatible /v1/chat/completions endpoint, powered by VS Code's Language Model API. Configure URL, port, and control server lifecycle from VS Code.",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "repository": {
     "type": "git",
     "url": "https://github.com/jianlins/vsllm_server.git"

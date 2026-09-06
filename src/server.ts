@@ -199,25 +199,15 @@ class VsCodeLmHandler {
     }
   }
 
-  /** Resolves the model, honouring an explicit `model` from the request before the configured default. */
-  async getClient(requestedModelId: string | undefined, cfg: RequestConfig): Promise<vscode.LanguageModelChat> {
+  /**
+   * Resolves the model to use for a request. The extension's configured model always wins;
+   * any `model` field sent by the client is ignored so clients can't switch models by asking
+   * for a different (even valid) name.
+   */
+  async getClient(cfg: RequestConfig): Promise<vscode.LanguageModelChat> {
     const models = await this.listModels();
     if (models.length === 0) {
       throw new HttpError(503, "No VS Code chat models are available.", "server_error", "model_unavailable");
-    }
-
-    const wanted = (requestedModelId || "").trim();
-    if (wanted && wanted !== "vsllm-copilot") {
-      const match = models.find((m) => m.id === wanted) ?? models.find((m) => m.family === wanted);
-      if (!match) {
-        throw new HttpError(
-          404,
-          `Unknown model '${wanted}'. Available: ${models.map((m) => m.id).join(", ")}.`,
-          "invalid_request_error",
-          "model_not_found"
-        );
-      }
-      return match;
     }
 
     if (cfg.modelId) {
@@ -321,7 +311,6 @@ class VsCodeLmHandler {
     messages: OpenAIMessage[],
     tools: OpenAITool[],
     toolChoice: unknown,
-    requestedModelId: string | undefined,
     cfg: RequestConfig,
     record: TrafficRecord,
     token: vscode.CancellationToken
@@ -329,7 +318,7 @@ class VsCodeLmHandler {
     const config = vscode.workspace.getConfiguration("vsllmServer");
     const toolsEnabled = config.get<boolean>("enableToolCalling", true);
 
-    const client = await this.getClient(requestedModelId, cfg);
+    const client = await this.getClient(cfg);
     monitor.setResolvedModel(record, `${client.id} (${client.vendor}/${client.family}, max in ${client.maxInputTokens})`);
 
     const toolNameMap = new Map<string, string>();
@@ -537,7 +526,9 @@ async function handleChatCompletions(
     const messages: OpenAIMessage[] = Array.isArray(payload.messages) ? payload.messages : [];
     const tools: OpenAITool[] = Array.isArray(payload.tools) ? payload.tools : [];
     isStreaming = payload.stream === true;
-    const modelName = payload.model || cfg.modelId || "vsllm-copilot";
+    // Report the extension's configured model name, not whatever the client asked for —
+    // the client's requested model is ignored entirely (see VsCodeLmHandler.getClient).
+    const modelName = cfg.modelId || "vsllm-copilot";
 
     if (messages.length === 0) {
       throw new HttpError(
@@ -587,7 +578,6 @@ async function handleChatCompletions(
       messages,
       tools,
       payload.tool_choice,
-      payload.model,
       cfg,
       record,
       cancellation.token
