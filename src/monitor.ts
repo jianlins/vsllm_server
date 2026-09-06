@@ -110,7 +110,6 @@ export class TrafficMonitor {
   private dirty = new Set<string>();
   private flushTimer: NodeJS.Timeout | undefined;
   private seq = 0;
-  private output: vscode.OutputChannel | undefined;
   private paused = false;
 
   private stats: MonitorStats = {
@@ -140,20 +139,6 @@ export class TrafficMonitor {
 
   private get captureBodies(): boolean {
     return vscode.workspace.getConfiguration("vsllmServer").get<boolean>("monitorCaptureBodies", true);
-  }
-
-  private get loggingEnabled(): boolean {
-    return vscode.workspace.getConfiguration("vsllmServer").get<boolean>("enableLogging", false);
-  }
-
-  private log(line: string) {
-    if (!this.loggingEnabled) {
-      return;
-    }
-    if (!this.output) {
-      this.output = vscode.window.createOutputChannel("VSLLM Server");
-    }
-    this.output.appendLine(`[${new Date().toISOString()}] ${line}`);
   }
 
   getSnapshot(): { records: TrafficRecord[]; stats: MonitorStats; server: ServerState } {
@@ -238,7 +223,6 @@ export class TrafficMonitor {
     this.stats.totalRequests++;
     this.stats.activeRequests++;
     this.stats.lastActivity = record.startedAt;
-    this.log(`--> #${record.seq} ${init.method} ${init.path}${init.query} from ${init.remote} (${record.userAgent})`);
     this.markDirty(record);
     return record;
   }
@@ -332,7 +316,6 @@ export class TrafficMonitor {
 
   event(record: TrafficRecord, kind: string, detail?: string) {
     record.timeline.push({ t: Date.now(), kind, detail });
-    this.log(`    #${record.seq} ${kind}${detail ? `: ${detail}` : ""}`);
     this.markDirty(record);
   }
 
@@ -353,10 +336,6 @@ export class TrafficMonitor {
     this.durationSum += record.durationMs;
     this.stats.avgDurationMs = Math.round(this.durationSum / Math.max(1, this.stats.completedRequests));
     this.stats.lastActivity = record.endedAt;
-    this.log(
-      `<-- #${record.seq} ${status} in ${record.durationMs}ms, ${record.responseBytes} bytes, ` +
-        `${record.chunkCount} chunks, ${record.toolCalls.length} tool calls, finish=${finishReason ?? "n/a"}`
-    );
     this.markDirty(record, true);
   }
 
@@ -407,7 +386,6 @@ export class TrafficMonitor {
       clearTimeout(this.flushTimer);
     }
     this.emitter.dispose();
-    this.output?.dispose();
   }
 }
 

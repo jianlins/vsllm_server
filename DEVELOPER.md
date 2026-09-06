@@ -98,7 +98,7 @@ Streaming emits `chat.completion.chunk` events, a final chunk with `finish_reaso
 
 `TrafficMonitor` is a singleton that records every request: method, path, remote address, headers, timings, byte counts, streamed chunks, tool activity, warnings, and errors. It keeps a bounded ring of records (`monitorMaxRecords`, clamped to 10–2000), clips captured bodies to `monitorBodyLimit`, and batches change events to the webview instead of firing per mutation.
 
-Bodies are only stored when `monitorCaptureBodies` is on. When `enableLogging` is on, the monitor also mirrors lines to a **VSLLM Server** output channel.
+Bodies are only stored when `monitorCaptureBodies` is on.
 
 `MonitorPanel` renders the history and handles webview messages: `ready`, `clear`, `pause`, `startServer`, `stopServer`, `export`, and `openSettings`.
 
@@ -114,7 +114,6 @@ Settings live under the `vsllmServer.*` namespace and are declared in `contribut
 | `vsllmServer.apiKey` | `""` | Machine-scoped. Enforced as a bearer token when non-empty |
 | `vsllmServer.allowedOrigins` | `[]` | CORS allowlist; empty sends no CORS headers |
 | `vsllmServer.maxRequestBytes` | `1048576` | Bodies above this get HTTP 413 |
-| `vsllmServer.enableLogging` | `false` | Enables the monitor's output-channel logging |
 | `vsllmServer.maxTokens` | `2048` | Declared but **never read** — see [Known gaps](#known-gaps) |
 | `vsllmServer.model` | `""` | Model id to serve; blank picks the first available |
 | `vsllmServer.enableToolCalling` | `true` | Forward `tools` and return `tool_calls` |
@@ -169,7 +168,7 @@ The repo does not commit a `launch.json`, so pressing <kbd>F5</kbd> will not wor
 }
 ```
 
-Then run `npm run watch` in a terminal and launch. In the Extension Development Host, open the VSLLM Server sidebar and click **Start Server**. Extension logs go to the *Debug Console*; with `enableLogging` on, monitor logs go to the **VSLLM Server** output channel; the panel's own logs appear in the webview devtools (**Developer: Open Webview Developer Tools**).
+Then run `npm run watch` in a terminal and launch. In the Extension Development Host, open the VSLLM Server sidebar and click **Start Server**. Extension logs go to the *Debug Console*; request traffic is inspected through the Traffic Monitor panel; the panel's own logs appear in the webview devtools (**Developer: Open Webview Developer Tools**).
 
 The Traffic Monitor is usually the fastest way to diagnose a misbehaving client — it shows the exact payload received, what was streamed back, and any warnings raised along the way.
 
@@ -274,7 +273,6 @@ The tag must match `package.json` or CI fails by design. Marketplace versions ar
 Accurate as of version 0.0.5. None of these block normal use, but they are worth knowing before changing related code.
 
 - **`maxTokens` is dead.** Declared in the manifest, never read by `src/`; responses are not capped.
-- **`enableLogging` is only half-honoured.** The monitor's output-channel logging respects it, but the `console.log` calls in `src/extension.ts` are unconditional.
 - **`vsllmServer.json` is unused and stale.** Nothing in `src/` reads it, it still ships inside the `.vsix`, and its `port` says `8080` while the manifest default is `8801`.
 - **No committed `launch.json`.** F5 debugging requires the config above.
 - **`VSLLM_SERVER_PROJECT_SUMMARY.md` is stale.** It describes an Express-based server and an unimplemented feature set; neither matches the current code. This guide supersedes it.

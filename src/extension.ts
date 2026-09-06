@@ -18,7 +18,6 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
   let port = config.get<number>('port', 8801);
   let model = config.get<string>('model', '');
   let apiKey = config.get<string>('apiKey', '');
-  let enableLogging = config.get<boolean>('enableLogging', false);
   // Always show 'listing...' initially, will be replaced asynchronously
   let modelOptions = "<option value=''>Loading models...</option>";
   // Basic HTML/JS/CSS for the config form
@@ -89,9 +88,6 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
         <label>API Key
           <input type="password" id="apiKey" value="${apiKey}" />
         </label>
-        <label>
-          <input type="checkbox" id="enableLogging" ${enableLogging ? "checked" : ""} /> Enable Logging
-        </label>
         <button type="submit">Save Configuration</button>
       </form>
       <div class="server-buttons">
@@ -121,8 +117,7 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
             model: document.getElementById('model').value,
             url: document.getElementById('url').value,
             port: parseInt(document.getElementById('port').value, 10),
-            apiKey: document.getElementById('apiKey').value,
-            enableLogging: document.getElementById('enableLogging').checked
+            apiKey: document.getElementById('apiKey').value
           });
         });
         document.getElementById('startServerBtn').addEventListener('click', function() {
@@ -241,7 +236,6 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
         } catch {
           // The setting is machine-scoped, so a stale workspace entry is ignored anyway.
         }
-        await config.update('enableLogging', message.enableLogging, vscode.ConfigurationTarget.Workspace);
         vscode.window.showInformationMessage('VSLLM Server configuration updated.');
       } else if (message.command === 'startServer') {
         await vscode.commands.executeCommand('vsllmServer.startServer');
