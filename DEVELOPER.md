@@ -33,7 +33,8 @@ vsllm_server/
 │   ├── monitor.ts                  # TrafficMonitor: in-memory request history + stats
 │   └── monitorPanel.ts             # Traffic Monitor webview panel
 ├── resources/vsllm-icon.svg        # Activity bar icon
-├── docs/pic/panel.png              # README screenshot
+├── resources/sidebar-panel.png     # README screenshot: sidebar panel
+├── resources/traffic-monitor.png   # README screenshot: traffic monitor
 ├── esbuild.js                      # Bundler config
 ├── tsconfig.json                   # Type-check only (noEmit in practice)
 ├── package.json                    # Extension manifest + scripts

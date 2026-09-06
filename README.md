@@ -53,8 +53,17 @@ Expose VSCode chat models as an OpenAI-compatible API endpoint. This extension p
 - Single **Server** on/off switch (plus restart command) and a **Traffic Monitor** on/off switch in the VSLLM Server sidebar
 - The Server switch doubles as a traffic light: grey when off, amber while starting, green once the server has been automatically tested and answered, red when it failed
 
-### Sidebar Panel 
-![VSLLM Server Sidebar Panel](docs/pic/panel.png)
+### Sidebar Panel
+
+<img src="resources/sidebar-panel.png" alt="VSLLM Server sidebar panel" width="380">
+
+Everything lives in one place, reachable from the VSLLM Server activity bar icon:
+
+- **Model Selection** — pick any chat model VS Code exposes; *Refresh Models* re-queries them
+- **Server URL / Port / API Key** — edit and *Save Configuration* without opening VS Code settings
+- **Server** switch — turns the server on and off, and doubles as a status light (here green, showing `Running · http://localhost:8801 · gpt-5.6-sol · replied in 1.0s`)
+- **📊 Traffic Monitor** switch — shows or hides the monitor panel
+- A live counter of requests, in-flight calls, errors, bytes in/out and tool calls
 
 ## Prerequisites
 **Important**: This extension requires Node.js to be available in your environment. If you're using conda, make sure to activate your conda environment that contains Node.js before starting VS Code:
@@ -97,6 +106,8 @@ The server exposes your Copilot session over plain HTTP, so treat it like a cred
 - The traffic monitor **redacts the `Authorization` header** in captured requests, so exported logs do not leak your key.
 
 ## Traffic Monitor
+
+![VSLLM Traffic Monitor](resources/traffic-monitor.png)
 
 Turn it on with the sidebar **📊 Traffic Monitor** switch, the view title icon, the status bar entry, or the command palette (`VSLLM Server: Open Traffic Monitor`). Flip the same switch off — or close the tab — when you no longer need to watch traffic; the switch and the panel always agree.
 
