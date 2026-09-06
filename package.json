@@ -131,11 +131,6 @@
           "default": 1048576,
           "markdownDescription": "**Max Request Size**\nLargest accepted request body in bytes. Larger requests are rejected with HTTP 413."
         },
-        "vsllmServer.enableLogging": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "**Enable Logging**\nTurn on verbose logging for debugging and diagnostics."
-        },
         "vsllmServer.maxTokens": {
           "type": "number",
           "default": 2048,

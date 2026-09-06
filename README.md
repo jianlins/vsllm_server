@@ -72,7 +72,6 @@ All options are available in the VSLLM Server sidebar panel or in VS Code settin
 - **API Key**: Optional; when set, clients must authenticate. Stored in your **user** settings, never in `.vscode/settings.json`.
 - **Allowed CORS Origins** (`vsllmServer.allowedOrigins`): empty by default, so no CORS headers are sent.
 - **Max Request Size** (`vsllmServer.maxRequestBytes`): default 1 MiB.
-- **Enable Logging**: Toggle verbose logging (writes to the "VSLLM Server" output channel).
 - **Enable Tool Calling** (`vsllmServer.enableToolCalling`, default `true`): forward client tool definitions to the model. Turn this off only to reproduce the "agent stops after one message" behaviour.
 - **Monitor History Size / Capture Bodies / Body Capture Limit**: control how much traffic the monitor keeps in memory.
 
