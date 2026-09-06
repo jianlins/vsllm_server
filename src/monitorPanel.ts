@@ -169,6 +169,7 @@ export function getMonitorHtml(cspSource: string): string {
   .pill { border-radius: 10px; padding: 1px 8px; font-size: 11px; font-weight: 600; white-space: nowrap; }
   .pill.on { background: #1f7a1f; color: #fff; }
   .pill.off { background: #7a1f1f; color: #fff; }
+  .pill.pending { background: #8a6d00; color: #fff; }
   .switch { position: relative; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; }
   .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
   .switch .track {
@@ -183,6 +184,9 @@ export function getMonitorHtml(cspSource: string): string {
   }
   .switch input:checked + .track { background: #2ea043; border-color: #2ea043; }
   .switch input:checked + .track .thumb { transform: translateX(15px); background: #fff; }
+  /* Traffic light: amber while the server is starting or being tested, red when it failed. */
+  .switch.pending input + .track, .switch.pending input:checked + .track { background: #8a6d00; border-color: #8a6d00; }
+  .switch.failed input + .track, .switch.failed input:checked + .track { background: #a31515; border-color: #a31515; }
   .switch input:focus-visible + .track { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
   .switch input:disabled + .track { opacity: .5; }
   .switch input:disabled { cursor: progress; }
@@ -345,10 +349,27 @@ export function getMonitorHtml(cspSource: string): string {
     const sw = document.getElementById("serverSwitch");
     const srv = state.server;
     if (!srv) { pill.textContent = "server: unknown"; pill.className = "pill off"; return; }
-    pill.textContent = srv.running ? ("listening " + srv.url + ":" + srv.port) : "server stopped";
-    pill.className = "pill " + (srv.running ? "on" : "off");
-    sw.checked = !!srv.running;
-    sw.disabled = false;
+    const phase = srv.phase || (srv.running ? "ready" : "stopped");
+    const endpoint = srv.url + ":" + srv.port;
+    const busy = phase === "starting" || phase === "testing";
+    if (busy) {
+      pill.textContent = (phase === "starting" ? "starting " : "testing ") + endpoint;
+      pill.className = "pill pending";
+    } else if (phase === "error") {
+      pill.textContent = "server error" + (srv.detail ? ": " + srv.detail : "");
+      pill.className = "pill off";
+    } else if (phase === "ready" || srv.running) {
+      pill.textContent = "listening " + endpoint;
+      pill.className = "pill on";
+    } else {
+      pill.textContent = "server stopped";
+      pill.className = "pill off";
+    }
+    pill.title = srv.detail || "";
+    sw.checked = !!srv.running || busy;
+    sw.disabled = phase === "starting";
+    sw.parentElement.className = "switch" + (busy ? " pending" : phase === "error" ? " failed" : "");
+  }
   }
 
   function statusBadge(rec) {
@@ -522,7 +543,8 @@ export function getMonitorHtml(cspSource: string): string {
   document.getElementById("serverSwitch").addEventListener("change", function () {
     const pill = document.getElementById("serverPill");
     pill.textContent = this.checked ? "starting..." : "stopping...";
-    pill.className = "pill off";
+    pill.className = "pill pending";
+    this.parentElement.className = "switch pending";
     this.disabled = true;
     vscodeApi.postMessage({ command: "setServer", running: this.checked });
   });

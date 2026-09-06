@@ -48,10 +48,12 @@ vsllm_server/
 The extension entry point. Responsibilities:
 
 - **`activate()`** registers the commands, the sidebar webview provider, and the status bar item, and warms the model cache in the background.
-- **`VsllmServerSidebarProvider`** renders the Server Status panel and handles webview messages: `saveConfig`, `setServer`, `setMonitor`, `testServer`, `getModelList`. It pushes an `updateToggles` message (server running/address, monitor open) whenever the server or monitor state changes, so the two on/off switches always mirror the real state.
+- **`VsllmServerSidebarProvider`** renders the Server Status panel and handles webview messages: `saveConfig`, `setServer`, `setMonitor`, `testServer`, `getModelList`. It pushes an `updateToggles` message (server running/address/phase/detail, monitor open) whenever the server or monitor state changes, so the two on/off switches always mirror the real state.
 - **`ModelCatalog`** owns model discovery: it reads/writes the `vsllmServer.models` cache, collapses concurrent refreshes into a single `selectChatModels()` call, and keeps the previous cache when a lookup fails so a transient Copilot hiccup cannot blank the dropdown.
 - **`getConfigWebviewHtml()`** builds the panel HTML as a template string, interpolating current settings (HTML-escaped) and the cached model list.
-- A **status bar item** shows live request/error counts from the monitor and opens the Traffic Monitor when clicked.
+- The **Server switch doubles as a traffic light**: default grey while stopped, amber (pulsing) while `starting`/`testing`, green once the automatic self-test passed, and red when startup or the self-test failed. The reason is shown in the state text next to it, and clicking that text re-runs the test.
+- **`runServerSelfTest()`/`verifyServerAndReportPhase()`** POST a real `hi` chat completion (`max_tokens: 16`, non-streaming) to `/v1/chat/completions` over the configured URL/port right after a successful start, with the API key when one is set and a 45s timeout. The light only turns green when the model actually returns non-empty text, so binding, authorization, the VS Code LM API and response serialization are all covered; the probe shows up in the Traffic Monitor like any other request. A stale result is discarded if the user stops the server while it is in flight.
+- A **status bar item** shows live request/error counts from the monitor, colors its icon by server phase, and opens the Traffic Monitor when clicked.
 
 Model loading never blocks the GUI. The panel HTML is written synchronously with the cached models already inlined as `<option>` elements, so the form and both switches are interactive on first paint; a `#modelStatus` line shows `⏳ Loading models…` / `⏳ Refreshing model list…` while a fresh `selectChatModels()` lookup runs, and the dropdown is repopulated via an `updateModelList` message when it settles. Messages carrying `loading: true` only refresh the indicator, so an empty cache never flashes a misleading "No models available". The view is registered with `retainContextWhenHidden: true`, so re-opening the sidebar reveals the existing webview instead of rebuilding it and re-running the lookup.
 
@@ -59,10 +61,10 @@ Registered commands — all declared in `contributes.commands`, so they are reac
 
 | Command ID | Behavior |
 | --- | --- |
-| `vsllmServer.startServer` | Reads `url`/`host`/`port` from settings and starts the server (warns if already running) |
+| `vsllmServer.startServer` | Reads `url`/`host`/`port` from settings, starts the server and self-tests it (warns if already running) |
 | `vsllmServer.stopServer` | Closes the running server |
 | `vsllmServer.toggleServer` | Turns the server on or off; accepts an optional boolean argument for the desired state. Backs the sidebar and monitor switches |
-| `vsllmServer.restartServer` | Stop (if running) then start |
+| `vsllmServer.restartServer` | Stop (if running) then start and self-test |
 | `vsllmServer.selectModel` | Lists available Copilot models in a notification |
 | `vsllmServer.openConfigPanel` | Opens Settings filtered to this extension |
 | `vsllmServer.openMonitor` | Opens the Traffic Monitor panel |

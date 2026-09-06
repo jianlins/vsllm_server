@@ -12,6 +12,9 @@ const fetch = require('node-fetch');
 
 const MODELS_CACHE_KEY = "vsllmServer.models";
 
+/** A real model round-trip can take a while on a cold Copilot connection. */
+const SELF_TEST_TIMEOUT_MS = 45000;
+
 type ModelInfo = { id: string; vendor: string; family: string };
 
 type ModelFetchResult = { models: ModelInfo[]; error?: string };
@@ -162,12 +165,21 @@ function getConfigWebviewHtml(catalog: ModelCatalog): string {
             border-color: var(--vscode-testing-iconPassed, #2ea043);
           }
           .switch input:checked + .track .thumb { transform: translateX(16px); background: #fff; }
+          /* Traffic light: amber while starting or being tested, red when the server failed. */
+          .switch.pending input + .track, .switch.pending input:checked + .track {
+            background: #d8a300;
+            border-color: #d8a300;
+            animation: switchPulse 1.2s ease-in-out infinite;
+          }
+          .switch.failed input + .track, .switch.failed input:checked + .track {
+            background: #d13438;
+            border-color: #d13438;
+          }
+          @keyframes switchPulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
           .switch input:focus-visible + .track { outline: 1px solid var(--vscode-focusBorder, #0078d4); outline-offset: 2px; }
           .switch input:disabled + .track { opacity: .5; }
           .switch input:disabled { cursor: progress; }
-          #testServerBtn { width: 100%; }
           #modelStatus { font-size: 0.72em; opacity: .75; min-height: 1.2em; margin-bottom: 8px; }
-          #serverResponse { width: 100%; height: 100px; margin-top: 16px; resize: vertical; border-radius: 10px; border: 1px solid #eee; }
       </style>
     </head>
     <body>
@@ -191,12 +203,12 @@ function getConfigWebviewHtml(catalog: ModelCatalog): string {
         <button type="submit">Save Configuration</button>
       </form>
       <div class="switch-row">
-        <label class="switch" title="Turn the VSLLM server on or off">
+        <label class="switch" id="serverSwitchLabel" title="Turn the VSLLM server on or off">
           <input type="checkbox" id="serverSwitch" />
           <span class="track"><span class="thumb"></span></span>
         </label>
         <span class="caption">Server</span>
-        <span class="state" id="serverState">Stopped</span>
+        <span class="state" id="serverState" title="Click to test the server again">Stopped</span>
       </div>
       <div class="switch-row">
         <label class="switch" title="Show or hide the traffic monitor">
@@ -206,9 +218,7 @@ function getConfigWebviewHtml(catalog: ModelCatalog): string {
         <span class="caption">📊 Traffic Monitor</span>
         <span class="state" id="monitorState">Closed</span>
       </div>
-      <button id="testServerBtn" type="button">Test Server</button>
       <div id="liveStats" style="margin-top:8px;font-size:0.78em;opacity:.8;line-height:1.5;"></div>
-      <textarea id="serverResponse" readonly placeholder="Server response will appear here..."></textarea>
       <script>
         const vscode = acquireVsCodeApi();
         const savedModel = ${toInlineJson(model)};
@@ -249,6 +259,7 @@ function getConfigWebviewHtml(catalog: ModelCatalog): string {
         document.getElementById('serverSwitch').addEventListener('change', function() {
           const wantRunning = this.checked;
           this.disabled = true;
+          document.getElementById('serverSwitchLabel').className = 'switch pending';
           document.getElementById('serverState').textContent = wantRunning ? 'Starting...' : 'Stopping...';
           vscode.postMessage({ command: 'setServer', running: wantRunning });
           if (wantRunning) {
@@ -261,21 +272,38 @@ function getConfigWebviewHtml(catalog: ModelCatalog): string {
           this.disabled = true;
           vscode.postMessage({ command: 'setMonitor', open: this.checked });
         });
-        document.getElementById('testServerBtn').addEventListener('click', function() {
+        document.getElementById('serverState').addEventListener('click', function() {
+          // Re-run the readiness check on demand; ignored while the server is off or already busy.
           vscode.postMessage({ command: 'testServer' });
         });
         window.addEventListener('message', event => {
           const message = event.data;
-          if (message.command === 'showServerResponse') {
-            document.getElementById('serverResponse').value = message.text;
-          }
           if (message.command === 'updateToggles') {
             const serverSwitch = document.getElementById('serverSwitch');
-            serverSwitch.checked = !!message.serverRunning;
-            serverSwitch.disabled = false;
-            document.getElementById('serverState').textContent = message.serverRunning
-              ? 'Running · ' + message.serverAddress
-              : 'Stopped';
+            const phase = message.serverPhase || (message.serverRunning ? 'ready' : 'stopped');
+            const busy = phase === 'starting' || phase === 'testing';
+            serverSwitch.checked = !!message.serverRunning || busy;
+            // Only the bind step is uninterruptible; a slow model round-trip stays cancellable.
+            serverSwitch.disabled = phase === 'starting';
+            document.getElementById('serverSwitchLabel').className =
+              'switch' + (busy ? ' pending' : phase === 'error' ? ' failed' : '');
+            const stateEl = document.getElementById('serverState');
+            if (phase === 'starting') {
+              stateEl.textContent = 'Starting...';
+            } else if (phase === 'testing') {
+              stateEl.textContent = 'Testing...';
+            } else if (phase === 'error') {
+              stateEl.textContent = (message.serverRunning ? 'Test failed · ' : 'Failed · ') +
+                (message.serverDetail || 'see the console for details');
+            } else if (message.serverRunning) {
+              stateEl.textContent = 'Running · ' + message.serverAddress +
+                (message.serverDetail ? ' · ' + message.serverDetail : '');
+            } else {
+              stateEl.textContent = 'Stopped';
+            }
+            stateEl.title = message.serverRunning && !busy
+              ? 'Click to test the server again'
+              : (message.serverDetail || '');
             const monitorSwitch = document.getElementById('monitorSwitch');
             monitorSwitch.checked = !!message.monitorOpen;
             monitorSwitch.disabled = false;
@@ -339,6 +367,98 @@ function getConfigWebviewHtml(catalog: ModelCatalog): string {
   `;
 }
 
+/**
+ * Probes the running server exactly like a real client would: it sends a tiny chat completion
+ * and requires actual text back, so the switch only turns green when the whole path — binding,
+ * API key check, VS Code LM API and response serialization — really works.
+ */
+async function runServerSelfTest(): Promise<{ ok: boolean; detail: string }> {
+  const config = vscode.workspace.getConfiguration('vsllmServer');
+  const url = config.get<string>('url', 'http://localhost');
+  const port = config.get<number>('port', 8801);
+  const apiKey = config.get<string>('apiKey', '').trim();
+  const model = config.get<string>('model', '').trim();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (apiKey) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
+  const payload: Record<string, unknown> = {
+    messages: [{ role: 'user', content: 'hi' }],
+    max_tokens: 16,
+    stream: false,
+  };
+  if (model) {
+    payload.model = model;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SELF_TEST_TIMEOUT_MS);
+  const startedAt = Date.now();
+  try {
+    const response = await fetch(`${url}:${port}/v1/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const raw = await response.text();
+    if (!response.ok) {
+      let reason = `HTTP ${response.status} ${response.statusText}`;
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed?.error?.message) {
+          reason += `: ${parsed.error.message}`;
+        }
+      } catch {
+        // A non-JSON error body is already covered by the status text.
+      }
+      return { ok: false, detail: reason };
+    }
+    let body: any;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      return { ok: false, detail: 'Server returned a non-JSON response' };
+    }
+    const reply = body?.choices?.[0]?.message?.content;
+    const text = typeof reply === 'string' ? reply.trim() : '';
+    if (!text) {
+      return { ok: false, detail: 'Server replied but the model returned no text' };
+    }
+    const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+    const modelName = typeof body?.model === 'string' && body.model ? body.model : model || 'default model';
+    return { ok: true, detail: `${modelName} replied in ${seconds}s` };
+  } catch (err) {
+    const raw = (err as any)?.message || String(err);
+    const message =
+      (err as any)?.name === 'AbortError'
+        ? `No response within ${Math.round(SELF_TEST_TIMEOUT_MS / 1000)}s`
+        : // node-fetch prefixes the whole URL; the part after "reason:" is what actually helps.
+          (raw.split('reason:').pop() || raw).trim();
+    return { ok: false, detail: message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Runs the self-test and drives the traffic light from amber to green or red. */
+async function verifyServerAndReportPhase(): Promise<boolean> {
+  if (!monitor.getServerState().running) {
+    monitor.setServerPhase('stopped');
+    return false;
+  }
+  monitor.setServerPhase('testing');
+  const result = await runServerSelfTest();
+  if (!monitor.getServerState().running) {
+    // The user stopped the server while the probe was in flight; the result is stale.
+    return false;
+  }
+  monitor.setServerPhase(result.ok ? 'ready' : 'error', result.detail);
+  if (!result.ok) {
+    console.error('VSLLM Server: self-test failed:', result.detail);
+  }
+  return result.ok;
+}
+
 class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'vsllmServerView';
   private webviewView?: vscode.WebviewView;
@@ -360,6 +480,8 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
       command: 'updateToggles',
       serverRunning: running,
       serverAddress: `${server.url}:${server.port}`,
+      serverPhase: server.phase,
+      serverDetail: server.detail,
       monitorOpen: MonitorPanel.isOpen(),
     });
   }
@@ -431,43 +553,7 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
       } else if (message.command === 'openMonitor') {
         await vscode.commands.executeCommand('vsllmServer.openMonitor');
       } else if (message.command === 'testServer') {
-        // Get config
-        const config = vscode.workspace.getConfiguration('vsllmServer');
-        const url = config.get<string>('url', 'http://localhost');
-        const port = config.get<number>('port', 8801);
-        const apiKey = config.get<string>('apiKey', '').trim();
-        try {
-          const testHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-          if (apiKey) {
-            testHeaders['Authorization'] = `Bearer ${apiKey}`;
-          }
-          const response = await fetch(`${url}:${port}/v1/chat/completions`, {
-            method: 'POST',
-            headers: testHeaders,
-            body: JSON.stringify({
-              model: config.get<string>('model', ''),
-              messages: [{ role: 'user', content: 'Hello!' }],
-              max_tokens: 10
-            })
-          });
-          if (!response.ok) {
-            throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
-          }
-          let result;
-          try {
-            result = await response.json();
-          } catch (jsonErr) {
-            throw new Error('Failed to parse server response as JSON: ' + (jsonErr as any).message);
-          }
-          if (this.webviewView) {
-            this.webviewView.webview.postMessage({ command: 'showServerResponse', text: JSON.stringify(result, null, 2) });
-          }
-        } catch (err) {
-          console.error('VSLLM Server: testServer error:', err);
-          if (this.webviewView) {
-            this.webviewView.webview.postMessage({ command: 'showServerResponse', text: 'Server test failed: ' + ((err as any).message || err) });
-          }
-        }
+        await verifyServerAndReportPhase();
       } else if (message.command === 'getModelList') {
         await this.sendModelList();
       }
@@ -512,11 +598,14 @@ export function activate(context: vscode.ExtensionContext) {
         const config = vscode.workspace.getConfiguration("vsllmServer");
         const url = config.get<string>("url", "http://localhost");
         const port = config.get<number>("port", 8801);
-        vscode.window.showInformationMessage(`Starting VSLLM Server on ${url}:${port}...`);
+        monitor.setServerPhase("starting");
         serverInstance = await startVsllmServer(context, { url, port });
+        // Turn the light green only after the endpoint answers a real request.
+        await verifyServerAndReportPhase();
       } catch (err) {
         serverInstance = null;
         console.error("VSLLM Server: startServer error:", err);
+        monitor.setServerPhase("error", (err as any)?.message || String(err));
       }
     })
   );
@@ -527,6 +616,7 @@ export function activate(context: vscode.ExtensionContext) {
       try {
         if (!serverInstance) {
           vscode.window.showWarningMessage("VSLLM Server is not running.");
+          monitor.setServerPhase("stopped");
           return;
         }
         await stopVsllmServer(serverInstance);
@@ -534,6 +624,7 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage("VSLLM Server stopped.");
       } catch (err) {
         console.error("VSLLM Server: stopServer error:", err);
+        monitor.setServerPhase("error", (err as any)?.message || String(err));
       }
     })
   );
@@ -589,11 +680,13 @@ export function activate(context: vscode.ExtensionContext) {
           await stopVsllmServer(serverInstance);
           serverInstance = null;
         }
-        vscode.window.showInformationMessage(`Restarting VSLLM Server on ${url}:${port}...`);
+        monitor.setServerPhase("starting");
         serverInstance = await startVsllmServer(context, { url, port });
+        await verifyServerAndReportPhase();
       } catch (err) {
         serverInstance = null;
         console.error("VSLLM Server: restartServer error:", err);
+        monitor.setServerPhase("error", (err as any)?.message || String(err));
       }
     })
   );
@@ -642,8 +735,31 @@ export function activate(context: vscode.ExtensionContext) {
   statusItem.tooltip = "VSLLM Server traffic — click to open the monitor";
   const renderStatus = () => {
     const { stats, server } = monitor.getSnapshot();
-    const dot = server.running ? "$(radio-tower)" : "$(circle-slash)";
-    statusItem.text = `${dot} VSLLM ${stats.totalRequests}${stats.activeRequests ? ` (${stats.activeRequests} live)` : ""}${stats.errorRequests ? ` $(error)${stats.errorRequests}` : ""}`;
+    const phase = server.phase ?? (server.running ? "ready" : "stopped");
+    const icons: Record<string, string> = {
+      stopped: "$(circle-slash)",
+      starting: "$(loading~spin)",
+      testing: "$(loading~spin)",
+      ready: "$(radio-tower)",
+      error: "$(error)",
+    };
+    const colors: Record<string, string | undefined> = {
+      starting: "charts.yellow",
+      testing: "charts.yellow",
+      ready: "charts.green",
+      error: "charts.red",
+    };
+    const color = colors[phase];
+    statusItem.color = color ? new vscode.ThemeColor(color) : undefined;
+    statusItem.text = `${icons[phase] ?? "$(circle-slash)"} VSLLM ${stats.totalRequests}${stats.activeRequests ? ` (${stats.activeRequests} live)` : ""}${stats.errorRequests ? ` $(error)${stats.errorRequests}` : ""}`;
+    statusItem.tooltip =
+      phase === "ready"
+        ? `VSLLM Server ready on ${server.url}:${server.port} — click to open the monitor`
+        : phase === "error"
+          ? `VSLLM Server problem: ${server.detail ?? "unknown error"} — click to open the monitor`
+          : phase === "stopped"
+            ? "VSLLM Server stopped — click to open the monitor"
+            : "VSLLM Server starting — click to open the monitor";
     statusItem.show();
   };
   renderStatus();
