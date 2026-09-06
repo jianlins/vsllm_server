@@ -41,7 +41,7 @@ Expose VSCode chat models as an OpenAI-compatible API endpoint. This extension p
 - Expose VS Code chat models as an OpenAI-compatible API
 - Local HTTP server for chat completions
 - Configure model, URL, port, API key, logging, and max tokens via VS Code settings or sidebar
-- Start, stop, restart server, and open configuration panel from the VSLLM Server sidebar
+- Single **Server** on/off switch (plus restart command) and a **Traffic Monitor** on/off switch in the VSLLM Server sidebar
 
 ### Sidebar Panel 
 ![VSLLM Server Sidebar Panel](docs/pic/panel.png)
@@ -89,7 +89,7 @@ The server exposes your Copilot session over plain HTTP, so treat it like a cred
 
 ## Traffic Monitor
 
-Open it from the sidebar button **📊 Open Traffic Monitor**, the view title icon, the status bar entry, or the command palette (`VSLLM Server: Open Traffic Monitor`).
+Turn it on with the sidebar **📊 Traffic Monitor** switch, the view title icon, the status bar entry, or the command palette (`VSLLM Server: Open Traffic Monitor`). Flip the same switch off — or close the tab — when you no longer need to watch traffic; the switch and the panel always agree.
 
 The monitor shows, live:
 
@@ -102,7 +102,7 @@ The monitor shows, live:
 - `finish_reason`, HTTP status, errors, and warnings that explain protocol problems
 - a per-request timeline of every step
 
-Controls: pause/resume capture, clear, filter (matches paths, bodies, tool names, errors), "problems only", and **Export JSON** to save the whole capture for sharing or offline analysis.
+Controls: the **Server** on/off switch, pause/resume capture, clear, filter (matches paths, bodies, tool names, errors), "problems only", and **Export JSON** to save the whole capture for sharing or offline analysis.
 
 ### Debugging an agent client that stops early
 
@@ -114,7 +114,7 @@ If a client such as opencode prints one sentence ("Let me fetch the repo...") an
 - An error record shows the exact message from the VS Code Language Model API (consent, quota, context length, ...).
 
 ## Usage
-- Use the VSLLM Server sidebar icon to start, stop, restart the server, and open the configuration panel.
+- Use the VSLLM Server sidebar icon to reach the controls: the **Server** switch turns the server on and off, the **📊 Traffic Monitor** switch shows or hides the monitor, and `VSLLM Server: Restart Server` restarts it after a settings change.
 - Configure all options in the sidebar or in the settings panel under "VSLLM Server Configuration".
 - Access the API at `http://localhost:8801/v1/chat/completions` (or your configured URL/port).
 

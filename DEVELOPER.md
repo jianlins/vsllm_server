@@ -48,7 +48,7 @@ vsllm_server/
 The extension entry point. Responsibilities:
 
 - **`activate()`** registers the commands, the sidebar webview provider, and the status bar item.
-- **`VsllmServerSidebarProvider`** renders the Server Status panel and handles webview messages: `saveConfig`, `startServer`, `stopServer`, `testServer`, `getModelList`.
+- **`VsllmServerSidebarProvider`** renders the Server Status panel and handles webview messages: `saveConfig`, `setServer`, `setMonitor`, `testServer`, `getModelList`. It pushes an `updateToggles` message (server running/address, monitor open) whenever the server or monitor state changes, so the two on/off switches always mirror the real state.
 - **`getConfigWebviewHtml()`** builds the panel HTML as a template string, interpolating current settings.
 - A **status bar item** shows live request/error counts from the monitor and opens the Traffic Monitor when clicked.
 
@@ -58,12 +58,15 @@ Registered commands — all declared in `contributes.commands`, so they are reac
 
 | Command ID | Behavior |
 | --- | --- |
-| `vsllmServer.startServer` | Reads `url`/`host`/`port` from settings and starts the server |
+| `vsllmServer.startServer` | Reads `url`/`host`/`port` from settings and starts the server (warns if already running) |
 | `vsllmServer.stopServer` | Closes the running server |
+| `vsllmServer.toggleServer` | Turns the server on or off; accepts an optional boolean argument for the desired state. Backs the sidebar and monitor switches |
 | `vsllmServer.restartServer` | Stop (if running) then start |
 | `vsllmServer.selectModel` | Lists available Copilot models in a notification |
 | `vsllmServer.openConfigPanel` | Opens Settings filtered to this extension |
 | `vsllmServer.openMonitor` | Opens the Traffic Monitor panel |
+| `vsllmServer.closeMonitor` | Closes the Traffic Monitor panel |
+| `vsllmServer.toggleMonitor` | Opens or closes the Traffic Monitor; accepts an optional boolean argument for the desired state |
 
 Settings written from the sidebar go to `ConfigurationTarget.Workspace`, **except `apiKey`**, which is written to `Global` (user) settings and actively removed from workspace settings if found there — this keeps the key out of a committed `.vscode/settings.json`.
 
@@ -100,7 +103,7 @@ Streaming emits `chat.completion.chunk` events, a final chunk with `finish_reaso
 
 Bodies are only stored when `monitorCaptureBodies` is on. When `enableLogging` is on, the monitor also mirrors lines to a **VSLLM Server** output channel.
 
-`MonitorPanel` renders the history and handles webview messages: `ready`, `clear`, `pause`, `startServer`, `stopServer`, `export`, and `openSettings`.
+`MonitorPanel` renders the history and handles webview messages: `ready`, `clear`, `pause`, `setServer`, `export`, and `openSettings`. It is a single-instance panel: `MonitorPanel.isOpen()`, `show()`, and `close()` drive `vsllmServer.toggleMonitor`, and `MonitorPanel.onDidChangeState` fires whenever the panel opens or closes — including when the user closes the tab — so the sidebar switch stays in sync.
 
 ## Configuration
 
@@ -169,7 +172,7 @@ The repo does not commit a `launch.json`, so pressing <kbd>F5</kbd> will not wor
 }
 ```
 
-Then run `npm run watch` in a terminal and launch. In the Extension Development Host, open the VSLLM Server sidebar and click **Start Server**. Extension logs go to the *Debug Console*; with `enableLogging` on, monitor logs go to the **VSLLM Server** output channel; the panel's own logs appear in the webview devtools (**Developer: Open Webview Developer Tools**).
+Then run `npm run watch` in a terminal and launch. In the Extension Development Host, open the VSLLM Server sidebar and flip the **Server** switch on. Extension logs go to the *Debug Console*; with `enableLogging` on, monitor logs go to the **VSLLM Server** output channel; the panel's own logs appear in the webview devtools (**Developer: Open Webview Developer Tools**).
 
 The Traffic Monitor is usually the fastest way to diagnose a misbehaving client — it shows the exact payload received, what was streamed back, and any warnings raised along the way.
 

@@ -15,6 +15,17 @@ function nonce(): string {
 export class MonitorPanel {
   public static readonly viewType = "vsllmServer.monitor";
   private static current: MonitorPanel | undefined;
+  private static readonly stateEmitter = new vscode.EventEmitter<boolean>();
+  /** Fires with the new open/closed state, including when the user closes the tab manually. */
+  public static readonly onDidChangeState = MonitorPanel.stateEmitter.event;
+
+  static isOpen(): boolean {
+    return MonitorPanel.current !== undefined;
+  }
+
+  static close() {
+    MonitorPanel.current?.dispose();
+  }
 
   static show(context: vscode.ExtensionContext) {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
@@ -29,6 +40,7 @@ export class MonitorPanel {
       { enableScripts: true, retainContextWhenHidden: true }
     );
     MonitorPanel.current = new MonitorPanel(panel, context);
+    MonitorPanel.stateEmitter.fire(true);
     return MonitorPanel.current;
   }
 
@@ -68,11 +80,10 @@ export class MonitorPanel {
       case "pause":
         monitor.setPaused(!!message.paused);
         break;
-      case "startServer":
-        await vscode.commands.executeCommand("vsllmServer.startServer");
-        break;
-      case "stopServer":
-        await vscode.commands.executeCommand("vsllmServer.stopServer");
+      case "setServer":
+        await vscode.commands.executeCommand("vsllmServer.toggleServer", !!message.running);
+        // Re-sync even when nothing changed (e.g. a failed start) so the switch cannot get stuck.
+        this.panel.webview.postMessage({ type: "server", server: monitor.getSnapshot().server });
         break;
       case "export": {
         const snapshot = monitor.getSnapshot();
@@ -97,11 +108,15 @@ export class MonitorPanel {
   }
 
   dispose() {
+    if (MonitorPanel.current !== this) {
+      return;
+    }
     MonitorPanel.current = undefined;
     this.panel.dispose();
     while (this.disposables.length) {
       this.disposables.pop()?.dispose();
     }
+    MonitorPanel.stateEmitter.fire(false);
   }
 
   private getHtml(webview: vscode.Webview): string {
@@ -154,6 +169,23 @@ export function getMonitorHtml(cspSource: string): string {
   .pill { border-radius: 10px; padding: 1px 8px; font-size: 11px; font-weight: 600; white-space: nowrap; }
   .pill.on { background: #1f7a1f; color: #fff; }
   .pill.off { background: #7a1f1f; color: #fff; }
+  .switch { position: relative; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; }
+  .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .switch .track {
+    display: inline-block; position: relative; width: 32px; height: 17px; border-radius: 9px;
+    background: var(--vscode-checkbox-background, #6b6b6b);
+    border: 1px solid var(--vscode-checkbox-border, #8a8a8a);
+    transition: background .15s ease;
+  }
+  .switch .thumb {
+    position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%;
+    background: var(--vscode-foreground, #ddd); transition: transform .15s ease;
+  }
+  .switch input:checked + .track { background: #2ea043; border-color: #2ea043; }
+  .switch input:checked + .track .thumb { transform: translateX(15px); background: #fff; }
+  .switch input:focus-visible + .track { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+  .switch input:disabled + .track { opacity: .5; }
+  .switch input:disabled { cursor: progress; }
   .stats { display: flex; gap: 14px; flex-wrap: wrap; padding: 6px 12px; font-size: 11.5px;
            border-bottom: 1px solid var(--vscode-panel-border); opacity: .9; }
   .stats b { font-weight: 600; }
@@ -199,9 +231,12 @@ export function getMonitorHtml(cspSource: string): string {
 </head>
 <body>
   <div class="toolbar">
+    <label class="switch" title="Turn the VSLLM server on or off">
+      <input type="checkbox" id="serverSwitch" />
+      <span class="track"><span class="thumb"></span></span>
+      <span>Server</span>
+    </label>
     <span id="serverPill" class="pill off">server: unknown</span>
-    <button id="startBtn">Start</button>
-    <button id="stopBtn">Stop</button>
     <span style="width:8px"></span>
     <button id="pauseBtn">Pause</button>
     <button id="clearBtn">Clear</button>
@@ -307,10 +342,13 @@ export function getMonitorHtml(cspSource: string): string {
 
   function renderServer() {
     const pill = document.getElementById("serverPill");
+    const sw = document.getElementById("serverSwitch");
     const srv = state.server;
     if (!srv) { pill.textContent = "server: unknown"; pill.className = "pill off"; return; }
     pill.textContent = srv.running ? ("listening " + srv.url + ":" + srv.port) : "server stopped";
     pill.className = "pill " + (srv.running ? "on" : "off");
+    sw.checked = !!srv.running;
+    sw.disabled = false;
   }
 
   function statusBadge(rec) {
@@ -481,8 +519,13 @@ export function getMonitorHtml(cspSource: string): string {
   document.getElementById("clearBtn").addEventListener("click", () => vscodeApi.postMessage({ command: "clear" }));
   document.getElementById("exportBtn").addEventListener("click", () => vscodeApi.postMessage({ command: "export" }));
   document.getElementById("settingsBtn").addEventListener("click", () => vscodeApi.postMessage({ command: "openSettings" }));
-  document.getElementById("startBtn").addEventListener("click", () => vscodeApi.postMessage({ command: "startServer" }));
-  document.getElementById("stopBtn").addEventListener("click", () => vscodeApi.postMessage({ command: "stopServer" }));
+  document.getElementById("serverSwitch").addEventListener("change", function () {
+    const pill = document.getElementById("serverPill");
+    pill.textContent = this.checked ? "starting..." : "stopping...";
+    pill.className = "pill off";
+    this.disabled = true;
+    vscodeApi.postMessage({ command: "setServer", running: this.checked });
+  });
   document.getElementById("pauseBtn").addEventListener("click", () => {
     state.paused = !state.paused;
     document.getElementById("pauseBtn").textContent = state.paused ? "Resume" : "Pause";

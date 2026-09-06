@@ -49,26 +49,45 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
             background-color: #222;
           }
           .advanced { margin-top: 20px; border-top: 1px solid #eee; padding-top: 10px; }
-          .server-buttons {
-            margin-top: 7.5px;
+          .switch-row {
             display: flex;
-            gap: 3px;
-            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            margin-top: 12px;
           }
-          .server-buttons button {
-            flex: 1 1 0;
-            min-width: 45px;
-            margin-top: 0;
-            padding: 2.25px 6px;
-            font-size: 0.60em;
-            border-radius: 7.5px;
-            background-color: #222;
-            color: #fff;
-            border: none;
+          .switch-row .caption { font-size: 0.85em; font-weight: 600; }
+          .switch-row .state { font-size: 0.75em; opacity: .75; margin-left: auto; text-align: right; }
+          .switch { position: relative; display: inline-flex; align-items: center; cursor: pointer; }
+          .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+          .switch .track {
+            display: inline-block;
+            position: relative;
+            width: 34px;
+            height: 18px;
+            border-radius: 9px;
+            background: var(--vscode-checkbox-background, #6b6b6b);
+            border: 1px solid var(--vscode-checkbox-border, #8a8a8a);
+            transition: background .15s ease;
           }
-          .server-buttons button:hover {
-            background-color: #222;
+          .switch .thumb {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--vscode-foreground, #ddd);
+            transition: transform .15s ease;
           }
+          .switch input:checked + .track {
+            background: var(--vscode-testing-iconPassed, #2ea043);
+            border-color: var(--vscode-testing-iconPassed, #2ea043);
+          }
+          .switch input:checked + .track .thumb { transform: translateX(16px); background: #fff; }
+          .switch input:focus-visible + .track { outline: 1px solid var(--vscode-focusBorder, #0078d4); outline-offset: 2px; }
+          .switch input:disabled + .track { opacity: .5; }
+          .switch input:disabled { cursor: progress; }
+          #testServerBtn { width: 100%; }
           #serverResponse { width: 100%; height: 100px; margin-top: 16px; resize: vertical; border-radius: 10px; border: 1px solid #eee; }
       </style>
     </head>
@@ -94,12 +113,23 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
         </label>
         <button type="submit">Save Configuration</button>
       </form>
-      <div class="server-buttons">
-        <button id="startServerBtn" type="button">Start Server</button>
-        <button id="stopServerBtn" type="button">Stop Server</button>
-        <button id="testServerBtn" type="button">Test Server</button>
+      <div class="switch-row">
+        <label class="switch" title="Turn the VSLLM server on or off">
+          <input type="checkbox" id="serverSwitch" />
+          <span class="track"><span class="thumb"></span></span>
+        </label>
+        <span class="caption">Server</span>
+        <span class="state" id="serverState">Stopped</span>
       </div>
-      <button id="openMonitorBtn" type="button" style="width:100%;margin-top:8px;">📊 Open Traffic Monitor</button>
+      <div class="switch-row">
+        <label class="switch" title="Show or hide the traffic monitor">
+          <input type="checkbox" id="monitorSwitch" />
+          <span class="track"><span class="thumb"></span></span>
+        </label>
+        <span class="caption">📊 Traffic Monitor</span>
+        <span class="state" id="monitorState">Closed</span>
+      </div>
+      <button id="testServerBtn" type="button">Test Server</button>
       <div id="liveStats" style="margin-top:8px;font-size:0.78em;opacity:.8;line-height:1.5;"></div>
       <textarea id="serverResponse" readonly placeholder="Server response will appear here..."></textarea>
       <script>
@@ -125,25 +155,40 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
             enableLogging: document.getElementById('enableLogging').checked
           });
         });
-        document.getElementById('startServerBtn').addEventListener('click', function() {
-          vscode.postMessage({ command: 'startServer' });
-          // After starting server, always try to refresh models
-          document.getElementById('serverResponse').value = '🔄 Refreshing model list after server start...';
-          vscode.postMessage({ command: 'getModelList' });
+        document.getElementById('serverSwitch').addEventListener('change', function() {
+          const wantRunning = this.checked;
+          this.disabled = true;
+          document.getElementById('serverState').textContent = wantRunning ? 'Starting...' : 'Stopping...';
+          vscode.postMessage({ command: 'setServer', running: wantRunning });
+          if (wantRunning) {
+            // A fresh start is the moment the model list is most likely to have changed.
+            document.getElementById('serverResponse').value = '🔄 Refreshing model list after server start...';
+            vscode.postMessage({ command: 'getModelList' });
+          }
         });
-        document.getElementById('stopServerBtn').addEventListener('click', function() {
-          vscode.postMessage({ command: 'stopServer' });
+        document.getElementById('monitorSwitch').addEventListener('change', function() {
+          this.disabled = true;
+          vscode.postMessage({ command: 'setMonitor', open: this.checked });
         });
         document.getElementById('testServerBtn').addEventListener('click', function() {
           vscode.postMessage({ command: 'testServer' });
-        });
-        document.getElementById('openMonitorBtn').addEventListener('click', function() {
-          vscode.postMessage({ command: 'openMonitor' });
         });
         window.addEventListener('message', event => {
           const message = event.data;
           if (message.command === 'showServerResponse') {
             document.getElementById('serverResponse').value = message.text;
+          }
+          if (message.command === 'updateToggles') {
+            const serverSwitch = document.getElementById('serverSwitch');
+            serverSwitch.checked = !!message.serverRunning;
+            serverSwitch.disabled = false;
+            document.getElementById('serverState').textContent = message.serverRunning
+              ? 'Running · ' + message.serverAddress
+              : 'Stopped';
+            const monitorSwitch = document.getElementById('monitorSwitch');
+            monitorSwitch.checked = !!message.monitorOpen;
+            monitorSwitch.disabled = false;
+            document.getElementById('monitorState').textContent = message.monitorOpen ? 'Open' : 'Closed';
           }
           if (message.command === 'updateStats') {
             var s = message.stats;
@@ -197,8 +242,27 @@ function getConfigWebviewHtml(webview: vscode.Webview, context: vscode.Extension
 class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'vsllmServerView';
   private webviewView?: vscode.WebviewView;
-  private statsSubscribed = false;
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  private subscribed = false;
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly isServerRunning: () => boolean
+  ) {}
+
+  /** Pushes the authoritative server/monitor state so both switches always mirror reality. */
+  private postToggleState() {
+    if (!this.webviewView) {
+      return;
+    }
+    const { server } = monitor.getSnapshot();
+    const running = this.isServerRunning();
+    this.webviewView.webview.postMessage({
+      command: 'updateToggles',
+      serverRunning: running,
+      serverAddress: `${server.url}:${server.port}`,
+      monitorOpen: MonitorPanel.isOpen(),
+    });
+  }
+
   async resolveWebviewView(webviewView: vscode.WebviewView) {
     this.webviewView = webviewView;
     webviewView.webview.options = { enableScripts: true };
@@ -210,15 +274,28 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
         this.webviewView.webview.postMessage({ command: 'updateModelList', models: this.context.globalState.get<any[]>("vsllmServer.models", []) });
       }
     }, 100);
+    this.postToggleState();
+    // The webview is torn down while hidden, so re-sync the switches whenever it comes back.
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        this.postToggleState();
+      }
+    });
     // Mirror live traffic counters into the sidebar so the user notices activity without opening the panel.
-    if (!this.statsSubscribed) {
-      this.statsSubscribed = true;
+    if (!this.subscribed) {
+      this.subscribed = true;
       this.context.subscriptions.push(
         monitor.onDidChange((event) => {
-          if ((event.type === 'upsert' || event.type === 'cleared') && this.webviewView?.visible) {
-            this.webviewView.webview.postMessage({ command: 'updateStats', stats: event.stats });
+          if (!this.webviewView?.visible) {
+            return;
           }
-        })
+          if (event.type === 'upsert' || event.type === 'cleared') {
+            this.webviewView.webview.postMessage({ command: 'updateStats', stats: event.stats });
+          } else if (event.type === 'server') {
+            this.postToggleState();
+          }
+        }),
+        MonitorPanel.onDidChangeState(() => this.postToggleState())
       );
     }
     webviewView.webview.onDidReceiveMessage(async (message) => {
@@ -243,10 +320,13 @@ class VsllmServerSidebarProvider implements vscode.WebviewViewProvider {
         }
         await config.update('enableLogging', message.enableLogging, vscode.ConfigurationTarget.Workspace);
         vscode.window.showInformationMessage('VSLLM Server configuration updated.');
-      } else if (message.command === 'startServer') {
-        await vscode.commands.executeCommand('vsllmServer.startServer');
-      } else if (message.command === 'stopServer') {
-        await vscode.commands.executeCommand('vsllmServer.stopServer');
+      } else if (message.command === 'setServer') {
+        await vscode.commands.executeCommand('vsllmServer.toggleServer', !!message.running);
+        // Always re-sync: a failed start leaves the switch out of step with reality.
+        this.postToggleState();
+      } else if (message.command === 'setMonitor') {
+        await vscode.commands.executeCommand('vsllmServer.toggleMonitor', !!message.open);
+        this.postToggleState();
       } else if (message.command === 'openMonitor') {
         await vscode.commands.executeCommand('vsllmServer.openMonitor');
       } else if (message.command === 'testServer') {
@@ -356,6 +436,10 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand("vsllmServer.startServer", async () => {
       try {
+        if (serverInstance) {
+          vscode.window.showWarningMessage("VSLLM Server is already running.");
+          return;
+        }
         const config = vscode.workspace.getConfiguration("vsllmServer");
         const url = config.get<string>("url", "http://localhost");
         const port = config.get<number>("port", 8801);
@@ -382,6 +466,18 @@ export function activate(context: vscode.ExtensionContext) {
       } catch (err) {
         console.error("VSLLM Server: stopServer error:", err);
       }
+    })
+  );
+
+  // Toggle server command: single entry point behind the on/off switches.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("vsllmServer.toggleServer", async (desired?: boolean) => {
+      const target = typeof desired === "boolean" ? desired : !serverInstance;
+      if (target === !!serverInstance) {
+        return !!serverInstance;
+      }
+      await vscode.commands.executeCommand(target ? "vsllmServer.startServer" : "vsllmServer.stopServer");
+      return !!serverInstance;
     })
   );
 
@@ -451,6 +547,26 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  // Close traffic monitor command
+  context.subscriptions.push(
+    vscode.commands.registerCommand("vsllmServer.closeMonitor", () => {
+      MonitorPanel.close();
+    })
+  );
+
+  // Toggle traffic monitor command: lets the user switch monitoring off once they are done.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("vsllmServer.toggleMonitor", (desired?: boolean) => {
+      const target = typeof desired === "boolean" ? desired : !MonitorPanel.isOpen();
+      if (target) {
+        MonitorPanel.show(context);
+      } else {
+        MonitorPanel.close();
+      }
+      return MonitorPanel.isOpen();
+    })
+  );
+
   // Status bar entry: live request counter that opens the monitor.
   const statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusItem.command = "vsllmServer.openMonitor";
@@ -466,7 +582,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Register the sidebar view provider
   try {
-    sidebarProviderInstance = new VsllmServerSidebarProvider(context);
+    sidebarProviderInstance = new VsllmServerSidebarProvider(context, () => serverInstance !== null);
     context.subscriptions.push(
       vscode.window.registerWebviewViewProvider(
         VsllmServerSidebarProvider.viewType,

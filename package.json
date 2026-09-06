@@ -47,6 +47,11 @@
         "category": "VSLLM Server"
       },
       {
+        "command": "vsllmServer.toggleServer",
+        "title": "Turn Server On/Off",
+        "category": "VSLLM Server"
+      },
+      {
         "command": "vsllmServer.restartServer",
         "title": "Restart Server",
         "category": "VSLLM Server"
@@ -66,12 +71,23 @@
         "title": "Open Traffic Monitor",
         "category": "VSLLM Server",
         "icon": "$(pulse)"
+      },
+      {
+        "command": "vsllmServer.closeMonitor",
+        "title": "Close Traffic Monitor",
+        "category": "VSLLM Server"
+      },
+      {
+        "command": "vsllmServer.toggleMonitor",
+        "title": "Turn Traffic Monitor On/Off",
+        "category": "VSLLM Server",
+        "icon": "$(pulse)"
       }
     ],
     "menus": {
       "view/title": [
         {
-          "command": "vsllmServer.openMonitor",
+          "command": "vsllmServer.toggleMonitor",
           "when": "view == vsllmServerView",
           "group": "navigation"
         }
