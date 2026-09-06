@@ -48,9 +48,11 @@ vsllm_server/
 The extension entry point. Responsibilities:
 
 - **`activate()`** registers the commands, the sidebar webview provider, and the status bar item.
-- **`VsllmServerSidebarProvider`** renders the Server Status panel and handles webview messages: `saveConfig`, `startServer`, `stopServer`, `testServer`, `getModelList`.
+- **`VsllmServerSidebarProvider`** renders the Server Status panel and handles webview messages: `saveConfig`, `startServer`, `stopServer`, `testServer`, `getServerState`, `getModelList`.
 - **`getConfigWebviewHtml()`** builds the panel HTML as a template string, interpolating current settings.
-- A **status bar item** shows live request/error counts from the monitor and opens the Traffic Monitor when clicked.
+- A **traffic-light switch** replaces the old Start/Stop/Test buttons: it is grey while stopped, amber (pulsing) while `starting`/`testing`, green once the automatic self-test passed, and red when startup or the self-test failed. Clicking it starts or stops the server; clicking the status label re-runs the test.
+- **`runServerSelfTest()`/`verifyServerAndReportPhase()`** POST a real `hi` chat completion (`max_tokens: 16`, non-streaming) to `/v1/chat/completions` over the configured URL/port right after a successful start, with the API key when one is set and a 45s timeout. The light only turns green when the model actually returns non-empty text, so binding, authorization, the VS Code LM API and response serialization are all covered; the probe shows up in the Traffic Monitor like any other request. A stale result is discarded if the user stops the server while it is in flight.
+- A **status bar item** shows live request/error counts from the monitor, colors its icon by server phase, and opens the Traffic Monitor when clicked.
 
 Discovered models are cached in `context.globalState` under `vsllmServer.models` so the panel can render immediately on reopen, then refresh asynchronously.
 
@@ -58,9 +60,9 @@ Registered commands — all declared in `contributes.commands`, so they are reac
 
 | Command ID | Behavior |
 | --- | --- |
-| `vsllmServer.startServer` | Reads `url`/`host`/`port` from settings and starts the server |
+| `vsllmServer.startServer` | Reads `url`/`host`/`port` from settings, starts the server and self-tests it |
 | `vsllmServer.stopServer` | Closes the running server |
-| `vsllmServer.restartServer` | Stop (if running) then start |
+| `vsllmServer.restartServer` | Stop (if running) then start and self-test |
 | `vsllmServer.selectModel` | Lists available Copilot models in a notification |
 | `vsllmServer.openConfigPanel` | Opens Settings filtered to this extension |
 | `vsllmServer.openMonitor` | Opens the Traffic Monitor panel |
@@ -169,7 +171,7 @@ The repo does not commit a `launch.json`, so pressing <kbd>F5</kbd> will not wor
 }
 ```
 
-Then run `npm run watch` in a terminal and launch. In the Extension Development Host, open the VSLLM Server sidebar and click **Start Server**. Extension logs go to the *Debug Console*; with `enableLogging` on, monitor logs go to the **VSLLM Server** output channel; the panel's own logs appear in the webview devtools (**Developer: Open Webview Developer Tools**).
+Then run `npm run watch` in a terminal and launch. In the Extension Development Host, open the VSLLM Server sidebar and flip the server switch on. Extension logs go to the *Debug Console*; with `enableLogging` on, monitor logs go to the **VSLLM Server** output channel; the panel's own logs appear in the webview devtools (**Developer: Open Webview Developer Tools**).
 
 The Traffic Monitor is usually the fastest way to diagnose a misbehaving client — it shows the exact payload received, what was streamed back, and any warnings raised along the way.
 

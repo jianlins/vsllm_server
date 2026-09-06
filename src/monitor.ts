@@ -67,11 +67,19 @@ export interface MonitorStats {
   lastActivity?: number;
 }
 
+/**
+ * Lifecycle of the local HTTP server as shown by the traffic-light switch in the sidebar:
+ * grey `stopped`, amber `starting`/`testing`, green `ready` (self-test passed), red `error`.
+ */
+export type ServerPhase = "stopped" | "starting" | "testing" | "ready" | "error";
+
 export interface ServerState {
   running: boolean;
   url: string;
   port: number;
   startedAt?: number;
+  phase: ServerPhase;
+  detail?: string;
 }
 
 export type MonitorEvent =
@@ -126,7 +134,7 @@ export class TrafficMonitor {
   };
   private durationSum = 0;
 
-  private server: ServerState = { running: false, url: "http://localhost", port: 8080 };
+  private server: ServerState = { running: false, url: "http://localhost", port: 8080, phase: "stopped" };
 
   private get maxRecords(): number {
     const value = vscode.workspace.getConfiguration("vsllmServer").get<number>("monitorMaxRecords", 200);
@@ -171,6 +179,15 @@ export class TrafficMonitor {
   setServerState(state: Partial<ServerState>) {
     this.server = { ...this.server, ...state };
     this.emitter.fire({ type: "server", server: { ...this.server } });
+  }
+
+  /** Moves the traffic light to a new phase; `detail` carries the reason shown under the switch. */
+  setServerPhase(phase: ServerPhase, detail?: string) {
+    this.setServerState({ phase, detail });
+  }
+
+  getServerState(): ServerState {
+    return { ...this.server };
   }
 
   clear() {

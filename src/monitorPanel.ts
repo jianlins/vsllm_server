@@ -154,6 +154,7 @@ export function getMonitorHtml(cspSource: string): string {
   .pill { border-radius: 10px; padding: 1px 8px; font-size: 11px; font-weight: 600; white-space: nowrap; }
   .pill.on { background: #1f7a1f; color: #fff; }
   .pill.off { background: #7a1f1f; color: #fff; }
+  .pill.pending { background: #8a6d00; color: #fff; }
   .stats { display: flex; gap: 14px; flex-wrap: wrap; padding: 6px 12px; font-size: 11.5px;
            border-bottom: 1px solid var(--vscode-panel-border); opacity: .9; }
   .stats b { font-weight: 600; }
@@ -309,8 +310,22 @@ export function getMonitorHtml(cspSource: string): string {
     const pill = document.getElementById("serverPill");
     const srv = state.server;
     if (!srv) { pill.textContent = "server: unknown"; pill.className = "pill off"; return; }
-    pill.textContent = srv.running ? ("listening " + srv.url + ":" + srv.port) : "server stopped";
-    pill.className = "pill " + (srv.running ? "on" : "off");
+    const phase = srv.phase || (srv.running ? "ready" : "stopped");
+    const endpoint = srv.url + ":" + srv.port;
+    if (phase === "starting" || phase === "testing") {
+      pill.textContent = (phase === "starting" ? "starting " : "testing ") + endpoint;
+      pill.className = "pill pending";
+    } else if (phase === "error") {
+      pill.textContent = "server error" + (srv.detail ? ": " + srv.detail : "");
+      pill.className = "pill off";
+    } else if (phase === "ready" || srv.running) {
+      pill.textContent = "listening " + endpoint;
+      pill.className = "pill on";
+    } else {
+      pill.textContent = "server stopped";
+      pill.className = "pill off";
+    }
+    pill.title = srv.detail || "";
   }
 
   function statusBadge(rec) {

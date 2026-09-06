@@ -4,6 +4,7 @@ Expose VSCode chat models as an OpenAI-compatible API endpoint. This extension p
 
 
 ## New in 0.0.5
+- **Server status light**: the sidebar now has a single traffic-light switch instead of the Start/Stop/Test buttons. It turns amber while the server starts, then automatically sends a real `hi` chat completion through the API, and only turns green once the model actually answers — red (with the reason) when it does not.
 - **Tool / function calling support**: OpenAI `tools` are forwarded to the VS Code Language Model API and `tool_calls` are returned to the client (both streaming and non-streaming), with `finish_reason: "tool_calls"`. This is what agent clients such as **opencode**, Cline, Aider or Continue need in order to actually run tools instead of stopping after the first sentence.
 - **Full tool round-trip**: assistant `tool_calls` and `role: "tool"` results sent back by the client are converted into `LanguageModelToolCallPart` / `LanguageModelToolResultPart` instead of being flattened into text.
 - **Traffic Monitor GUI**: a new panel (`VSLLM Server: Open Traffic Monitor`) shows every request in and out — payloads, streamed chunks, tool calls, timings, bytes, warnings and errors.
@@ -41,7 +42,7 @@ Expose VSCode chat models as an OpenAI-compatible API endpoint. This extension p
 - Expose VS Code chat models as an OpenAI-compatible API
 - Local HTTP server for chat completions
 - Configure model, URL, port, API key, logging, and max tokens via VS Code settings or sidebar
-- Start, stop, restart server, and open configuration panel from the VSLLM Server sidebar
+- One traffic-light switch in the sidebar starts/stops the server: grey when off, amber while starting, green once the server has been automatically tested and is ready, red when it failed
 
 ### Sidebar Panel 
 ![VSLLM Server Sidebar Panel](docs/pic/panel.png)
@@ -114,7 +115,9 @@ If a client such as opencode prints one sentence ("Let me fetch the repo...") an
 - An error record shows the exact message from the VS Code Language Model API (consent, quota, context length, ...).
 
 ## Usage
-- Use the VSLLM Server sidebar icon to start, stop, restart the server, and open the configuration panel.
+- Use the VSLLM Server sidebar icon to open the panel, then flip the server switch to start or stop the server.
+- The switch doubles as a status light: **grey** = stopped, **amber** = starting / being tested, **green** = tested and ready, **red** = start or test failed (the reason is shown next to it). Click the status label to run the test again.
+- The test is a real request: the extension sends a short `hi` chat completion through `/v1/chat/completions` and only turns the light green when the model answers with actual text. The exchange is visible in the Traffic Monitor, and the green label shows which model replied and how long it took.
 - Configure all options in the sidebar or in the settings panel under "VSLLM Server Configuration".
 - Access the API at `http://localhost:8801/v1/chat/completions` (or your configured URL/port).
 

@@ -823,7 +823,7 @@ export async function startVsllmServer(
             ? `Permission denied binding ${host}:${port}.`
             : err.message;
       const message = `VSLLM Server failed to start: ${detail}`;
-      monitor.setServerState({ running: false, url, port });
+      monitor.setServerState({ running: false, url, port, phase: "error", detail });
       vscode.window.showErrorMessage(message);
       reject(new Error(message));
     };
@@ -838,11 +838,12 @@ export async function startVsllmServer(
       context.subscriptions.push({
         dispose: () => {
           server.close();
-          monitor.setServerState({ running: false });
+          monitor.setServerState({ running: false, phase: "stopped", detail: undefined });
         },
       });
 
-      monitor.setServerState({ running: true, url, port, startedAt: Date.now() });
+      // The caller verifies the endpoint before the light turns green, so stay amber for now.
+      monitor.setServerState({ running: true, url, port, startedAt: Date.now(), phase: "starting", detail: undefined });
       vscode.window.showInformationMessage(`VSLLM Server running on ${url}:${port}/v1/chat/completions`);
       if (!LOOPBACK_HOSTS.has(host)) {
         vscode.window.showWarningMessage(
@@ -862,7 +863,7 @@ export async function startVsllmServer(
 export async function stopVsllmServer(server: http.Server) {
   return new Promise<void>((resolve) => {
     server.close(() => {
-      monitor.setServerState({ running: false });
+      monitor.setServerState({ running: false, phase: "stopped", detail: undefined });
       resolve();
     });
   });
