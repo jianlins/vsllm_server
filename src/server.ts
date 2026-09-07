@@ -327,6 +327,14 @@ class VsCodeLmHandler {
       throw new HttpError(400, "Request contained no usable messages.");
     }
 
+    const lastRole = (messages[messages.length - 1]?.role || "user").toLowerCase();
+    if (client.id === "auto" && (lastRole === "tool" || lastRole === "function")) {
+      vsMessages.push(
+        vscode.LanguageModelChatMessage.User("Continue the response using the preceding tool result.")
+      );
+      monitor.event(record, "routing", "added a prompt so the auto model can route the tool-result continuation");
+    }
+
     const options: vscode.LanguageModelChatRequestOptions = {
       justification: "VSLLM Server is forwarding an OpenAI-compatible API request.",
     };
